@@ -198,13 +198,10 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
     if (isSideways) {
         details.push(`⚠️ Lưu ý: Thị trường đang đi ngang, tín hiệu có thể không chính xác`);
     }
-    if (signalText !== '⚪️ ĐỢI - Chưa có tín hiệu') {
         details.push(`✅ Độ tin cậy: ${confidence}%`);
         details.push(`🎯 Điểm vào: ${entry.toFixed(4)}`);
         details.push(`🛑 SL: ${sl.toFixed(4)}`);
         details.push(`💰 TP: ${tp.toFixed(4)}`);
-    }
-
     const result = `📊 *Phân tích ${symbol}/${pair} (${timeframes[timeframe]})*\n💰 Giá: ${currentPrice.toFixed(4)}\n⚡️ *${signalText}*\n${details.join('\n')}`;
     return { result, confidence };
 }
