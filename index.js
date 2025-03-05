@@ -1,6 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const { RSI, SMA, MACD, BollingerBands, ADX, ATR } = require('technicalindicators');
+const tf = require('@tensorflow/tfjs');
 
 // Configuration
 const TOKEN = '7605131321:AAGCW_FWEqBC7xMOt8RwL4nek4vqxPBVluY'; // Thay bằng token thực tế của bạn
@@ -9,7 +10,54 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 
 const timeframes = { '1m': '1 phút', '5m': '5 phút', '15m': '15 phút', '1h': '1 giờ', '4h': '4 giờ', '1d': '1 ngày' };
 
-async function fetchKlines(symbol, pair, timeframe, limit = 100) {
+// Khởi tạo mô hình TensorFlow.js
+let model;
+async function initializeModel() {
+    model = tf.sequential();
+    model.add(tf.layers.dense({ units: 50, activation: 'relu', inputShape: [6] }));
+    model.add(tf.layers.dense({ units: 20, activation: 'relu' }));
+    model.add(tf.layers.dense({ units: 3, activation: 'softmax' }));
+    model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy', metrics: ['accuracy'] });
+    console.log('✅ Mô hình TensorFlow.js đã được khởi tạo');
+}
+
+// Huấn luyện mô hình với nhãn từ logic rule-based
+async function trainModel(data) {
+    const inputs = [];
+    const outputs = [];
+    for (let i = 1; i < data.length; i++) {
+        const curr = data[i];
+        const close = data.slice(0, i).map(d => d.close);
+        const volume = data.slice(0, i).map(d => d.volume);
+        const rsi = computeRSI(close);
+        const ma10 = computeMA(close, 10);
+        const ma50 = computeMA(close, 50);
+        const [, , histogram] = computeMACD(close);
+        const [, middleBB] = computeBollingerBands(close);
+        const adx = computeADX(data.slice(0, i));
+        const volumeMA = computeMA(volume, 20);
+        const volumeSpike = curr.volume > volumeMA * 1.5 ? 1 : 0;
+
+        inputs.push([rsi, adx, histogram, volumeSpike, ma10 - ma50, curr.close - middleBB]);
+
+        // Nhãn từ logic rule-based
+        let signal = [0, 0, 1]; // ĐỢI mặc định
+        if (adx > 30) {
+            if (rsi < 30 && ma10 > ma50 && histogram > 0 && volumeSpike && curr.close < middleBB) signal = [1, 0, 0]; // LONG mạnh
+            else if (rsi > 70 && ma10 < ma50 && histogram < 0 && volumeSpike && curr.close > middleBB) signal = [0, 1, 0]; // SHORT mạnh
+        }
+        outputs.push(signal);
+    }
+
+    const xs = tf.tensor2d(inputs);
+    const ys = tf.tensor2d(outputs);
+    await model.fit(xs, ys, { epochs: 20, batchSize: 32, shuffle: true });
+    console.log('✅ Mô hình đã được huấn luyện với logic rule-based');
+    xs.dispose();
+    ys.dispose();
+}
+
+async function fetchKlines(symbol, pair, timeframe, limit = 200) {
     try {
         const response = await axios.get(`${BINANCE_API}/klines`, {
             params: { symbol: `${symbol.toUpperCase()}${pair.toUpperCase()}`, interval: timeframe, limit },
@@ -45,12 +93,11 @@ function computeATR(data, period = 14) {
     const result = ATR.calculate({ high: data.map(d => d.high), low: data.map(d => d.low), close: data.map(d => d.close), period });
     return result.slice(-1)[0] || 0;
 }
-
 function computeSupportResistance(data) {
     const highs = data.map(d => d.high);
     const lows = data.map(d => d.low);
-    const support = Math.min(...lows); // Mức thấp nhất
-    const resistance = Math.max(...highs); // Mức cao nhất
+    const support = Math.min(...lows);
+    const resistance = Math.max(...highs);
     return { support, resistance };
 }
 
@@ -69,129 +116,131 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
     const adx = computeADX(df);
     const atr = computeATR(df);
     const volumeMA = computeMA(volume, 20);
-    const volumeSpike = volume[volume.length - 1] > volumeMA * 1.5;
+    const volumeSpike = volume[volume.length - 1] > volumeMA * 1.5 ? 1 : 0;
     const { support, resistance } = computeSupportResistance(df);
 
-    // Ngưỡng mặc định hoặc tùy chỉnh
+    // Ngưỡng tùy chỉnh
     const rsiOverbought = customThresholds.rsiOverbought || 70;
     const rsiOversold = customThresholds.rsiOversold || 30;
     const adxStrongTrend = customThresholds.adxStrongTrend || 30;
     const adxWeakTrend = customThresholds.adxWeakTrend || 20;
 
-    let signalText = '⚪️ ĐỢI - Chưa có tín hiệu';
-    let confidence = 0;
-    let entry = 0, sl = 0, tp = 0;
-    let details = [
-        `RSI: ${rsi.toFixed(1)} (Overbought: ${rsiOverbought}, Oversold: ${rsiOversold})`,
-        `MACD: ${macd.toFixed(4)} / ${signal.toFixed(4)}`,
-        `ADX: ${adx.toFixed(1)}`,
-        `Volume: ${volumeSpike ? 'TĂNG ĐỘT BIẾN' : 'BÌNH THƯỜNG'}`
-    ];
+    // Dự đoán AI
+    const input = tf.tensor2d([[rsi, adx, histogram, volumeSpike, ma10 - ma50, currentPrice - middleBB]]);
+    const prediction = model.predict(input);
+    const [longProb, shortProb, waitProb] = prediction.dataSync();
+    input.dispose();
+    prediction.dispose();
 
+    let signalText, confidence, entry = 0, sl = 0, tp = 0;
+    const maxProb = Math.max(longProb, shortProb, waitProb);
+    confidence = Math.round(maxProb * 100);
+
+    // Logic rule-based để xác nhận
+    let ruleBasedSignal = '⚪️ ĐỢI - Chưa có tín hiệu';
+    let ruleConfidence = 30;
     if (adx > adxStrongTrend) {
         if (rsi < rsiOversold && ma10 > ma50 && histogram > 0 && volumeSpike && currentPrice < middleBB) {
-            signalText = '🟢 LONG - Mua mạnh';
-            confidence = 90;
-            entry = currentPrice;
-            sl = Math.max(currentPrice - atr * 2, support); // SL không dưới support
-            tp = Math.min(currentPrice + atr * 4, resistance); // TP không vượt resistance
+            ruleBasedSignal = '🟢 LONG - Mua mạnh';
+            ruleConfidence = 90;
         } else if (rsi > rsiOverbought && ma10 < ma50 && histogram < 0 && volumeSpike && currentPrice > middleBB) {
-            signalText = '🔴 SHORT - Bán mạnh';
-            confidence = 90;
-            entry = currentPrice;
-            sl = Math.min(currentPrice + atr * 2, resistance); // SL không vượt resistance
-            tp = Math.max(currentPrice - atr * 4, support); // TP không dưới support
-        }
-        // Tín hiệu yếu hơn nếu thiếu volume hoặc Bollinger Bands
-        else if (rsi < rsiOversold && ma10 > ma50 && histogram > 0) {
-            signalText = '🟢 LONG - Mua (chưa xác nhận volume)';
-            confidence = 60;
-            entry = currentPrice;
-            sl = Math.max(currentPrice - atr * 2, support);
-            tp = Math.min(currentPrice + atr * 3, resistance);
+            ruleBasedSignal = '🔴 SHORT - Bán mạnh';
+            ruleConfidence = 90;
+        } else if (rsi < rsiOversold && ma10 > ma50 && histogram > 0) {
+            ruleBasedSignal = '🟢 LONG - Mua (chưa xác nhận volume)';
+            ruleConfidence = 60;
         } else if (rsi > rsiOverbought && ma10 < ma50 && histogram < 0) {
-            signalText = '🔴 SHORT - Bán (chưa xác nhận volume)';
-            confidence = 60;
-            entry = currentPrice;
-            sl = Math.min(currentPrice + atr * 2, resistance);
-            tp = Math.max(currentPrice - atr * 3, support);
+            ruleBasedSignal = '🔴 SHORT - Bán (chưa xác nhận volume)';
+            ruleConfidence = 60;
         }
     } else if (adx > adxWeakTrend && adx <= adxStrongTrend) {
         if (rsi < rsiOversold && ma10 > ma50 && histogram > 0) {
-            signalText = '🟢 LONG SỚM - Xu hướng tăng tiềm năng';
-            confidence = 50;
-            entry = currentPrice;
-            sl = Math.max(currentPrice - atr * 1.5, support);
-            tp = Math.min(currentPrice + atr * 3, resistance);
+            ruleBasedSignal = '🟢 LONG SỚM - Xu hướng tăng tiềm năng';
+            ruleConfidence = 50;
         } else if (rsi > rsiOverbought && ma10 < ma50 && histogram < 0) {
-            signalText = '🔴 SHORT SỚM - Xu hướng giảm tiềm năng';
-            confidence = 50;
-            entry = currentPrice;
-            sl = Math.min(currentPrice + atr * 1.5, resistance);
-            tp = Math.max(currentPrice - atr * 3, support);
+            ruleBasedSignal = '🔴 SHORT SỚM - Xu hướng giảm tiềm năng';
+            ruleConfidence = 50;
         }
     } else if (adx < adxWeakTrend) {
         if (currentPrice <= lowerBB && rsi < rsiOversold) {
-            signalText = '🟢 LONG NGẮN - Giá chạm đáy Bollinger';
-            confidence = 70;
-            entry = currentPrice;
-            sl = lowerBB - atr * 0.5;
-            tp = middleBB;
+            ruleBasedSignal = '🟢 LONG NGẮN - Giá chạm đáy Bollinger';
+            ruleConfidence = 70;
         } else if (currentPrice >= upperBB && rsi > rsiOverbought) {
-            signalText = '🔴 SHORT NGẮN - Giá chạm đỉnh Bollinger';
-            confidence = 70;
-            entry = currentPrice;
-            AscendingDescendingOrder = true;
-            sl = upperBB + atr * 0.5;
-            tp = middleBB;
-        } else {
-            signalText = '🟡 GIỮ - Thị trường sideway';
-            confidence = 30;
+            ruleBasedSignal = '🔴 SHORT NGẮN - Giá chạm đỉnh Bollinger';
+            ruleConfidence = 70;
         }
     }
 
-    details.push(`Bollinger: ${lowerBB.toFixed(4)} - ${upperBB.toFixed(4)}`);
-    details.push(`Hỗ trợ: ${support.toFixed(4)}, Kháng cự: ${resistance.toFixed(4)}`);
-    if (confidence > 0) {
-        details.push(`Độ tin cậy: ${confidence}%`);
-        details.push(`Điểm vào: ${entry.toFixed(4)}`);
-        details.push(`SL: ${sl.toFixed(4)}`);
-        details.push(`TP: ${tp.toFixed(4)}`);
+    // Kết hợp AI và Rule-Based
+    if (maxProb === longProb) {
+        signalText = '🟢 LONG - Mua';
+        entry = currentPrice;
+        sl = Math.max(currentPrice - atr * 2, support);
+        tp = Math.min(currentPrice + atr * 4, resistance);
+        if (ruleBasedSignal.includes('LONG')) confidence = Math.max(confidence, ruleConfidence); // Lấy confidence cao hơn
+    } else if (maxProb === shortProb) {
+        signalText = '🔴 SHORT - Bán';
+        entry = currentPrice;
+        sl = Math.min(currentPrice + atr * 2, resistance);
+        tp = Math.max(currentPrice - atr * 4, support);
+        if (ruleBasedSignal.includes('SHORT')) confidence = Math.max(confidence, ruleConfidence);
+    } else {
+        signalText = '⚪️ ĐỢI - Chưa có tín hiệu';
+        confidence = Math.min(confidence, ruleConfidence); // Confidence thấp nếu ĐỢI
     }
 
-    const result = `📊 *Phân tích ${symbol}/${pair} (${timeframes[timeframe]})*
-💰 Giá: ${currentPrice.toFixed(4)}
-⚡️ *${signalText}*
-${details.join('\n')}`;
+    // Chi tiết kết quả
+    let details = [
+        `📈 RSI: ${rsi.toFixed(1)}`,
+        `📊 MACD: ${macd.toFixed(4)} / ${signal.toFixed(4)}`,
+        `📉 ADX: ${adx.toFixed(1)}`,
+        `📦 Volume: ${volumeSpike ? 'TĂNG ĐỘT BIẾN' : 'BÌNH THƯỜNG'}`
+    ];
+    details.push(`📏 Bollinger: ${lowerBB.toFixed(4)} - ${upperBB.toFixed(4)}`);
+    details.push(`🛡️ Hỗ trợ: ${support.toFixed(4)}, Kháng cự: ${resistance.toFixed(4)}`);
+    details.push(`🤖 AI Signal: ${maxProb === longProb ? 'LONG' : maxProb === shortProb ? 'SHORT' : 'ĐỢI'} (${confidence}%)`);
+    details.push(`📏 Rule Signal: ${ruleBasedSignal.split(' - ')[1] || 'Chưa có tín hiệu'} (${ruleConfidence}%)`);
+    if (signalText !== '⚪️ ĐỢI - Chưa có tín hiệu') {
+        details.push(`✅ Độ tin cậy kết hợp: ${confidence}%`);
+        details.push(`🎯 Điểm vào: ${entry.toFixed(4)}`);
+        details.push(`🛑 SL: ${sl.toFixed(4)}`);
+        details.push(`💰 TP: ${tp.toFixed(4)}`);
+    }
 
-    return { result, confidence, chatId: null }; // Trả về object để xử lý cảnh báo sau
+    const result = `📊 *Phân tích ${symbol}/${pair} (${timeframes[timeframe]})*\n💰 Giá: ${currentPrice.toFixed(4)}\n⚡️ *${signalText}*\n${details.join('\n')}`;
+    return { result, confidence };
 }
 
-bot.onText(/\?(.+)/, async (msg, match) => {
-    const parts = match[1].split(',');
-    if (parts.length < 3) return bot.sendMessage(msg.chat.id, '⚠️ Sai định dạng! VD: ?ada,usdt,15m hoặc ?ada,usdt,15m,rsi25-75');
+// Khởi động bot và huấn luyện mô hình
+(async () => {
+    await initializeModel();
+    const initialData = await fetchKlines('BTC', 'USDT', '1h', 200);
+    if (initialData) await trainModel(initialData);
 
-    const [symbol, pair, timeframe, customThreshold] = parts.map(p => p.trim().toLowerCase());
-    if (!timeframes[timeframe]) return bot.sendMessage(msg.chat.id, '⚠️ Khung thời gian không hợp lệ');
+    bot.onText(/\?(.+)/, async (msg, match) => {
+        const parts = match[1].split(',');
+        if (parts.length < 3) return bot.sendMessage(msg.chat.id, '⚠️ Sai định dạng! VD: ?ada,usdt,15m hoặc ?ada,usdt,15m,rsi25-75');
+        const [symbol, pair, timeframe, customThreshold] = parts.map(p => p.trim().toLowerCase());
+        if (!timeframes[timeframe]) return bot.sendMessage(msg.chat.id, '⚠️ Khung thời gian không hợp lệ');
 
-    let customThresholds = {};
-    if (customThreshold && customThreshold.startsWith('rsi')) {
-        const [oversold, overbought] = customThreshold.replace('rsi', '').split('-').map(Number);
-        if (!isNaN(oversold) && !isNaN(overbought) && oversold < overbought) {
-            customThresholds.rsiOversold = oversold;
-            customThresholds.rsiOverbought = overbought;
-        } else {
-            return bot.sendMessage(msg.chat.id, '⚠️ Định dạng RSI không hợp lệ! VD: rsi25-75');
+        let customThresholds = {};
+        if (customThreshold && customThreshold.startsWith('rsi')) {
+            const [oversold, overbought] = customThreshold.replace('rsi', '').split('-').map(Number);
+            if (!isNaN(oversold) && !isNaN(overbought) && oversold < overbought) {
+                customThresholds.rsiOversold = oversold;
+                customThresholds.rsiOverbought = overbought;
+            } else {
+                return bot.sendMessage(msg.chat.id, '⚠️ Định dạng RSI không hợp lệ! VD: rsi25-75');
+            }
         }
-    }
 
-    const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe, customThresholds);
-    bot.sendMessage(msg.chat.id, result, { parse_mode: 'Markdown' });
+        const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe, customThresholds);
+        bot.sendMessage(msg.chat.id, result, { parse_mode: 'Markdown' });
 
-    // Gửi cảnh báo nếu độ tin cậy > 80%
-    if (confidence > 80) {
-        bot.sendMessage(msg.chat.id, `🚨 *CẢNH BÁO* 🚨\n${result}`, { parse_mode: 'Markdown' });
-    }
-});
+        if (confidence > 80) {
+            bot.sendMessage(msg.chat.id, `🚨 *CẢNH BÁO* 🚨\n${result}`, { parse_mode: 'Markdown' });
+        }
+    });
 
-console.log('✅ Bot đang chạy...');
+    console.log('✅ Bot đang chạy...');
+})();
