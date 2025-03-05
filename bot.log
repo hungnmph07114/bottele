@@ -1,0 +1,123 @@
+2025-03-04 23:02:35,918 - ERROR - TeleBot - Threaded polling exception: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-03-04 23:02:35,920 - ERROR - TeleBot - Exception traceback:
+Traceback (most recent call last):
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1234, in __threaded_polling
+    polling_thread.raise_exceptions()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 111, in raise_exceptions
+    raise self.exception_info
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 93, in run
+    task(*args, **kwargs)
+    ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 688, in __retrieve_updates
+    updates = self.get_updates(offset=(self.last_update_id + 1),
+                               allowed_updates=allowed_updates,
+                               timeout=timeout, long_polling_timeout=long_polling_timeout)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 660, in get_updates
+    json_updates = apihelper.get_updates(
+        self.token, offset=offset, limit=limit, timeout=timeout, allowed_updates=allowed_updates,
+        long_polling_timeout=long_polling_timeout)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 332, in get_updates
+    return _make_request(token, method_url, params=payload)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 168, in _make_request
+    json_result = _check_result(method_name, result)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 195, in _check_result
+    raise ApiTelegramException(method_name, result, result_json)
+telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+
+2025-03-04 23:20:11,347 - INFO - CryptoBot - Bot initialized successfully
+2025-03-04 23:20:11,347 - INFO - CryptoBot - Bot is starting...
+2025-03-04 23:20:22,342 - INFO - CryptoBot - New request: ?ada,btc,1h
+2025-03-04 23:20:22,342 - INFO - CryptoBot - Analyzing request: ADA/BTC - 1h
+2025-03-04 23:20:23,418 - INFO - CryptoBot - Getting data for ADA/BTC (1h)
+2025-03-04 23:20:23,419 - INFO - CryptoBot - Calling API: https://api.binance.com/api/v3/klines?symbol=ADABTC&interval=1h&limit=100
+2025-03-04 23:20:23,692 - INFO - CryptoBot - Got 100 rows of data
+2025-03-04 23:20:24,694 - INFO - CryptoBot - Identifying S/D zones...
+2025-03-04 23:20:24,775 - INFO - utils.trading_utils - Found 0 S/D zones
+2025-03-04 23:20:24,776 - INFO - CryptoBot - Found 0 zones
+2025-03-04 23:20:24,776 - INFO - CryptoBot - Creating chart...
+2025-03-04 23:20:24,921 - ERROR - utils.chart_utils - Error creating chart: array(['purple', 'purple', 'purple', 'purple', 'purple', 'purple',
+       'purple', 'purple', 'purple', 'purple', 'purple', 'purple',
+       'purple', 'purple', 'purple', 'purple', 'purple', 'purple',
+       'purple', 'purple', 'purple', 'purple', 'purple', 'purple',
+       'purple', 'purple', 'purple', 'purple', 'purple', 'purple',
+       'purple', 'purple', 'purple', 'purple', 'purple', 'purple',
+       'purple', 'purple', 'red', 'purple', 'purple', 'purple', 'purple',
+       'purple', 'purple', 'purple', 'purple', 'purple', 'purple',
+       'purple', 'red', 'red', 'red', 'red', 'red', 'red', 'red', 'red',
+       'red', 'red', 'red', 'red', 'red', 'red', 'purple', 'purple',
+       'purple', 'purple', 'purple', 'purple', 'purple', 'purple',
+       'green', 'green', 'purple', 'purple', 'purple', 'purple', 'green',
+       'purple', 'purple', 'purple', 'purple', 'purple', 'purple',
+       'purple', 'purple', 'purple', 'purple', 'purple', 'purple',
+       'purple', 'purple', 'purple', 'purple', 'purple', 'purple',
+       'purple', 'red', 'red'], dtype='<U6') is not a valid value for color: supported inputs are (r, g, b) and (r, g, b, a) 0-1 float tuples; '#rrggbb', '#rrggbbaa', '#rgb', '#rgba' strings; named color strings; string reprs of 0-1 floats for grayscale values; 'C0', 'C1', ... strings for colors of the color cycle; and pairs combining one of the above with an alpha value
+2025-03-04 23:20:24,922 - ERROR - CryptoBot - Cannot create chart
+2025-03-04 23:22:36,272 - ERROR - TeleBot - Threaded polling exception: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-03-04 23:22:36,274 - ERROR - TeleBot - Exception traceback:
+Traceback (most recent call last):
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1234, in __threaded_polling
+    polling_thread.raise_exceptions()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 111, in raise_exceptions
+    raise self.exception_info
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 93, in run
+    task(*args, **kwargs)
+    ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 688, in __retrieve_updates
+    updates = self.get_updates(offset=(self.last_update_id + 1),
+                               allowed_updates=allowed_updates,
+                               timeout=timeout, long_polling_timeout=long_polling_timeout)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 660, in get_updates
+    json_updates = apihelper.get_updates(
+        self.token, offset=offset, limit=limit, timeout=timeout, allowed_updates=allowed_updates,
+        long_polling_timeout=long_polling_timeout)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 332, in get_updates
+    return _make_request(token, method_url, params=payload)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 168, in _make_request
+    json_result = _check_result(method_name, result)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 195, in _check_result
+    raise ApiTelegramException(method_name, result, result_json)
+telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+
+2025-03-04 23:22:36,276 - INFO - CryptoBot - Removed lock file
+2025-03-04 23:24:52,551 - INFO - CryptoBot - Bot initialized successfully
+2025-03-04 23:24:52,551 - INFO - CryptoBot - Bot is starting...
+2025-03-04 23:25:04,043 - INFO - CryptoBot - New request: ?btc,usdt,1h
+2025-03-04 23:25:04,043 - INFO - CryptoBot - Analyzing request: BTC/USDT - 1h
+2025-03-04 23:25:05,431 - INFO - CryptoBot - Getting data for BTC/USDT (1h)
+2025-03-04 23:25:05,432 - INFO - CryptoBot - Calling API: https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=100
+2025-03-04 23:25:05,640 - INFO - CryptoBot - Got 100 rows of data
+2025-03-04 23:25:06,641 - INFO - CryptoBot - Identifying S/D zones...
+2025-03-04 23:25:06,688 - INFO - utils.trading_utils - Found 0 S/D zones
+2025-03-04 23:25:06,688 - INFO - CryptoBot - Found 0 zones
+2025-03-04 23:25:06,688 - INFO - CryptoBot - Creating chart...
+2025-03-04 23:25:07,206 - INFO - CryptoBot - Sending chart to user...
+2025-03-04 23:26:52,897 - ERROR - TeleBot - Threaded polling exception: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-03-04 23:26:52,902 - ERROR - TeleBot - Exception traceback:
+Traceback (most recent call last):
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1234, in __threaded_polling
+    polling_thread.raise_exceptions()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 111, in raise_exceptions
+    raise self.exception_info
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 93, in run
+    task(*args, **kwargs)
+    ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 688, in __retrieve_updates
+    updates = self.get_updates(offset=(self.last_update_id + 1),
+                               allowed_updates=allowed_updates,
+                               timeout=timeout, long_polling_timeout=long_polling_timeout)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 660, in get_updates
+    json_updates = apihelper.get_updates(
+        self.token, offset=offset, limit=limit, timeout=timeout, allowed_updates=allowed_updates,
+        long_polling_timeout=long_polling_timeout)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 332, in get_updates
+    return _make_request(token, method_url, params=payload)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 168, in _make_request
+    json_result = _check_result(method_name, result)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 195, in _check_result
+    raise ApiTelegramException(method_name, result, result_json)
+telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+
+2025-03-04 23:26:52,904 - INFO - CryptoBot - Removed lock file

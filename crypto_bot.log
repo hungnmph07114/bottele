@@ -1,0 +1,51 @@
+2025-03-05 02:34:09,079 - INFO - Khởi động Crypto Bot...
+2025-03-05 02:45:13,127 - ERROR - Infinity polling: polling exited
+2025-03-05 02:45:13,128 - ERROR - Break infinity polling
+2025-03-05 02:50:53,744 - INFO - 🤖 Khởi động Crypto Bot Pro...
+2025-03-05 02:50:54,210 - INFO - Websocket connected
+2025-03-05 02:54:57,796 - ERROR - Infinity polling: polling exited
+2025-03-05 02:54:57,796 - ERROR - Break infinity polling
+2025-03-05 02:54:59,555 - INFO - Khởi động bot...
+2025-03-05 02:55:08,081 - ERROR - Analysis error: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+2025-03-05 03:03:54,904 - INFO - Khởi động bot...
+2025-03-05 03:04:04,950 - ERROR - Analysis error: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+2025-03-05 03:09:45,063 - INFO - Khởi động bot...
+2025-03-05 03:10:02,654 - ERROR - Analysis error: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+Traceback (most recent call last):
+  File "D:\bot4\simple_crypto_bot.py", line 203, in get_crypto_analysis
+    df_long = fetch_klines(symbol, pair, '4h') or df_short.copy()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\generic.py", line 1577, in __nonzero__
+    raise ValueError(
+    ...<2 lines>...
+    )
+ValueError: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+2025-03-05 03:15:05,999 - INFO - Khởi động bot...
+2025-03-05 03:27:21,321 - INFO - Khởi động bot...
+2025-03-05 03:34:22,759 - ERROR - Polling exception: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2025-03-05 03:34:22,771 - ERROR - Exception traceback:
+Traceback (most recent call last):
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1299, in __non_threaded_polling
+    self.__retrieve_updates(timeout, long_polling_timeout, allowed_updates=allowed_updates)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 688, in __retrieve_updates
+    updates = self.get_updates(offset=(self.last_update_id + 1),
+                               allowed_updates=allowed_updates,
+                               timeout=timeout, long_polling_timeout=long_polling_timeout)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 660, in get_updates
+    json_updates = apihelper.get_updates(
+        self.token, offset=offset, limit=limit, timeout=timeout, allowed_updates=allowed_updates,
+        long_polling_timeout=long_polling_timeout)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 332, in get_updates
+    return _make_request(token, method_url, params=payload)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 168, in _make_request
+    json_result = _check_result(method_name, result)
+  File "C:\Users\itisl\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 195, in _check_result
+    raise ApiTelegramException(method_name, result, result_json)
+telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+
+2025-03-05 11:20:10,107 - INFO - Khởi động bot...
+2025-03-05 11:24:01,002 - INFO - Khởi động bot...
+2025-03-05 11:28:54,714 - INFO - Khởi động bot...
+2025-03-05 11:36:55,414 - INFO - Khởi động bot...
+2025-03-05 12:02:28,142 - INFO - Khởi động bot...
