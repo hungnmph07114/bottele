@@ -150,7 +150,7 @@ async function isValidMarket(symbol, pair) {
     }
 }
 
-async function fetchKlines(symbol, pair, timeframe, limit = 1000) {
+async function fetchKlines(symbol, pair, timeframe, limit = 200) {
     try {
         const response = await axios.get(`${BINANCE_API}/klines`, {
             params: { symbol: `${symbol.toUpperCase()}${pair.toUpperCase()}`, interval: timeframe, limit },
@@ -466,39 +466,44 @@ function startAutoChecking() {
 
     // Lệnh trợ giúp
     bot.onText(/\/trogiup/, (msg) => {
-        const chatId = msg.chat.id;
         const helpMessage = `
 📚 *HƯỚNG DẪN SỬ DỤNG BOT GIAO DỊCH*
 
 Dưới đây là các lệnh hiện có và cách sử dụng:
 
 1. **?symbol,pair,timeframe[,rsiOversold-rsiOverbought]**
-   - *Mô tả*: Phân tích thủ công...
+   - *Mô tả*: Phân tích thủ công cặp giao dịch, trả về tín hiệu và các mức giá (entry, SL, TP).
+   - *Cú pháp*: ?<coin>,<đồng giao dịch>,<khung thời gian>[,rsi<giá trị thấp>-<giá trị cao>]
+   - *Ví dụ*:
+     - ?ada,usdt,5m (phân tích ADA/USDT khung 5 phút)
+     - ?btc,usdt,1h,rsi25-75 (phân tích BTC/USDT khung 1 giờ, tùy chỉnh RSI 25-75)
+   - *Khung thời gian hợp lệ*: ${Object.keys(timeframes).join(', ')}
 
-(Phần còn lại của help message của bạn)
+2. **/tinhieu symbol,pair,timeframe**
+   - *Mô tả*: Kích hoạt theo dõi tự động, gửi tín hiệu khi độ tin cậy ≥ 80%.
+   - *Cú pháp*: /tinhieu <coin>,<đồng giao dịch>,<khung thời gian>
+   - *Ví dụ*:
+     - /tinhieu ada,usdt,5m (theo dõi ADA/USDT khung 5 phút)
+     - /tinhieu btc,usdt,1h (theo dõi BTC/USDT khung 1 giờ)
+   - *Khung thời gian hợp lệ*: ${Object.keys(timeframes).join(', ')}
+
+3. **/dungtinhieu symbol,pair,timeframe**
+   - *Mô tả*: Dừng theo dõi tự động một cặp giao dịch.
+   - *Cú pháp*: /dungtinhieu <coin>,<đồng giao dịch>,<khung thời gian>
+   - *Ví dụ*:
+     - /dungtinhieu ada,usdt,5m (dừng theo dõi ADA/USDT khung 5 phút)
+
+4. **/trogiup**
+   - *Mô tả*: Hiển thị danh sách lệnh và hướng dẫn sử dụng (bạn đang xem).
+   - *Cú pháp*: /trogiup
+   - *Ví dụ*: /trogiup
+
+*Lưu ý*:
+- Bot sử dụng AI và chỉ báo kỹ thuật (RSI, MACD, ADX, Bollinger Bands) để phân tích.
+- Nếu thị trường đi ngang, tín hiệu vẫn được đưa ra nhưng kèm cảnh báo độ chính xác thấp.
+- Đảm bảo nhập đúng cặp giao dịch tồn tại trên Binance (ví dụ: ADA/USDT, BTC/USDT).
         `;
-
-        const keyboard = {
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: 'Liên hệ hỗ trợ', url: 'https://t.me/your_support_channel' },
-                        { text: 'Đánh giá bot', callback_data: 'rate_bot' }
-                    ]
-                ]
-            }
-        };
-
-        bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown', ...keyboard });
-    });
-
-    bot.on('callback_query', (query) => {
-        const chatId = query.message.chat.id;
-
-        if (query.data === 'rate_bot') {
-            bot.sendMessage(chatId, 'Vui lòng đánh giá bot bằng cách cho sao nhé! (Tính năng này chưa hoạt động đầy đủ)');
-        }
-        bot.answerCallbackQuery(query.id);
+        bot.sendMessage(msg.chat.id, helpMessage, { parse_mode: 'Markdown' });
     });
 
     // Bắt đầu kiểm tra tự động
@@ -508,13 +513,13 @@ Dưới đây là các lệnh hiện có và cách sử dụng:
 
     // Đóng database khi tắt bot
     process.on('SIGINT', () => {
-        insertStmt.finalize((err) => {
+        insertStmt.finalize((err) => { // Đóng prepared statement
             if (err) {
                 console.error("Lỗi đóng insertStmt:", err.message);
                 fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi đóng insertStmt: ${err.message}\n`);
             }
         });
-        deleteStmt.finalize((err) => {
+        deleteStmt.finalize((err) => { // Đóng prepared statement
             if (err) {
                 console.error("Lỗi đóng deleteStmt:", err.message);
                 fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi đóng deleteStmt: ${err.message}\n`);
