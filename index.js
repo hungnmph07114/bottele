@@ -8,7 +8,23 @@ const TOKEN = '7605131321:AAGCW_FWEqBC7xMOt8RwL4nek4vqxPBVluY';
 const BINANCE_API = 'https://api.binance.com/api/v3';
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-const timeframes = { '1m': '1 phút', '5m': '5 phút', '15m': '15 phút', '1h': '1 giờ', '4h': '4 giờ', '1d': '1 ngày' };
+const timeframes = {
+    '1m': '1 phút',
+    '5m': '5 phút',
+    '15m': '15 phút',
+    '30m': '30 phút',
+    '1h': '1 giờ',
+    '2h': '2 giờ',
+    '4h': '4 giờ',
+    '6h': '6 giờ',
+    '8h': '8 giờ',
+    '12h': '12 giờ',
+    '1d': '1 ngày',
+    '3d': '3 ngày',
+    '1w': '1 tuần',
+    '1M': '1 tháng'
+};
+
 
 // Danh sách theo dõi tự động (chatId -> [{symbol, pair, timeframe}])
 const autoWatchList = new Map();
@@ -198,10 +214,13 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
     if (isSideways) {
         details.push(`⚠️ Lưu ý: Thị trường đang đi ngang, tín hiệu có thể không chính xác`);
     }
+    if (signalText !== '⚪️ ĐỢI - Chưa có tín hiệu') {
         details.push(`✅ Độ tin cậy: ${confidence}%`);
         details.push(`🎯 Điểm vào: ${entry.toFixed(4)}`);
         details.push(`🛑 SL: ${sl.toFixed(4)}`);
         details.push(`💰 TP: ${tp.toFixed(4)}`);
+    }
+
     const result = `📊 *Phân tích ${symbol}/${pair} (${timeframes[timeframe]})*\n💰 Giá: ${currentPrice.toFixed(4)}\n⚡️ *${signalText}*\n${details.join('\n')}`;
     return { result, confidence };
 }
