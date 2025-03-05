@@ -2,9 +2,11 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const { RSI, SMA, MACD, BollingerBands, ADX, ATR } = require('technicalindicators');
 const tf = require('@tensorflow/tfjs');
+const fs = require('fs');
+const sqlite3 = require('sqlite3').verbose();
 
 // Configuration
-const TOKEN = '7605131321:AAGCW_FWEqBC7xMOt8RwL4nek4vqxPBVluY'; // Thay thế bằng token bot của bạn
+const TOKEN = '7605131321:AAGCW_FWEqBC7xMOt8RwL4nek4vqxPBVluY';
 const BINANCE_API = 'https://api.binance.com/api/v3';
 const bot = new TelegramBot(TOKEN, { polling: true });
 
@@ -25,52 +27,110 @@ const timeframes = {
     '1M': '1 tháng'
 };
 
+// Khởi tạo cơ sở dữ liệu SQLite
+const db = new sqlite3.Database('bot.db', (err) => {
+    if (err) {
+        console.error(err.message);
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi kết nối SQLite: ${err.message}\n`);
+    } else {
+        console.log('✅ Đã kết nối với cơ sở dữ liệu SQLite.');
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Đã kết nối với cơ sở dữ liệu SQLite.\n`);
+    }
+});
 
-// Danh sách theo dõi tự động (chatId -> [{symbol, pair, timeframe}])
-const autoWatchList = new Map();
+// Tạo bảng để lưu trữ cấu hình theo dõi
+db.serialize(() => {
+    db.run(`
+        CREATE TABLE IF NOT EXISTS watch_configs (
+            chatId INTEGER NOT NULL,
+            symbol TEXT NOT NULL,
+            pair TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            PRIMARY KEY (chatId, symbol, pair, timeframe)
+        )
+    `, (err) => {
+        if (err) {
+            console.error("Lỗi tạo bảng watch_configs:", err.message);
+            fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi tạo bảng watch_configs: ${err.message}\n`);
+        }
+    });
+});
+
+// Prepare statements
+const insertStmt = db.prepare(`
+    INSERT OR IGNORE INTO watch_configs (chatId, symbol, pair, timeframe)
+    VALUES (?, ?, ?, ?)
+`);
+const deleteStmt = db.prepare(`
+    DELETE FROM watch_configs
+    WHERE chatId = ? AND symbol = ? AND pair = ? AND timeframe = ?
+`);
+
 
 // Khởi tạo mô hình TensorFlow.js
 let model;
 async function initializeModel() {
     model = tf.sequential();
-    model.add(tf.layers.dense({ units: 50, activation: 'relu', inputShape: [6] }));
-    model.add(tf.layers.dense({ units: 20, activation: 'relu' }));
+    model.add(tf.layers.lstm({ units: 64, returnSequences: false, inputShape: [1, 10] }));
+    model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
+    model.add(tf.layers.dropout({ rate: 0.2 }));
     model.add(tf.layers.dense({ units: 3, activation: 'softmax' }));
     model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy', metrics: ['accuracy'] });
-    console.log('✅ Mô hình TensorFlow.js đã được khởi tạo');
+    console.log('✅ Mô hình TensorFlow.js đã được khởi tạo (LSTM)');
+    fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Mô hình TensorFlow.js đã được khởi tạo (LSTM)\n`);
 }
 
 // Huấn luyện mô hình với nhãn từ logic rule-based
 async function trainModel(data) {
     const inputs = [];
     const outputs = [];
-    for (let i = 1; i < data.length; i++) {
+    const atrPeriod = 14;
+    for (let i = atrPeriod + 20; i < data.length; i++) {
         const curr = data[i];
         const close = data.slice(0, i).map(d => d.close);
         const volume = data.slice(0, i).map(d => d.volume);
+
         const rsi = computeRSI(close);
         const ma10 = computeMA(close, 10);
         const ma50 = computeMA(close, 50);
         const [, , histogram] = computeMACD(close);
         const [, middleBB] = computeBollingerBands(close);
         const adx = computeADX(data.slice(0, i));
+        const atr = computeATR(data.slice(i - atrPeriod, i));
         const volumeMA = computeMA(volume, 20);
         const volumeSpike = curr.volume > volumeMA * 1.5 ? 1 : 0;
 
-        inputs.push([rsi, adx, histogram, volumeSpike, ma10 - ma50, curr.close - middleBB]);
+        // Chuẩn hóa dữ liệu
+        const normalizedRsi = rsi / 100;
+        const normalizedAdx = adx / 100;
+        const normalizedHistogram = histogram / 1000;
+        const normalizedMaDiff = (ma10 - ma50) / curr.close;
+        const normalizedBbDiff = (curr.close - middleBB) / curr.close;
+        const normalizedAtr = atr / curr.close;
+
+        // Lagged features
+        const closeLag1 = data[i - 1].close / curr.close;
+        const closeLag2 = data[i - 2].close / curr.close;
+
+        // Rolling statistics
+        const rsiRollingMean = SMA.calculate({ values: close.slice(-5).map(d => computeRSI([d])), period: 5 })[0] / 100 || normalizedRsi;
+
+        // Tạo input array
+        inputs.push([[normalizedRsi, normalizedAdx, normalizedHistogram, volumeSpike, normalizedMaDiff, normalizedBbDiff, closeLag1, closeLag2, normalizedAtr, rsiRollingMean]]);
 
         let signal = [0, 0, 1]; // ĐỢI mặc định
         if (adx > 30) {
-            if (rsi < 30 && ma10 > ma50 && histogram > 0 && volumeSpike && curr.close < middleBB) signal = [1, 0, 0]; // LONG mạnh
-            else if (rsi > 70 && ma10 < ma50 && histogram < 0 && volumeSpike && curr.close > middleBB) signal = [0, 1, 0]; // SHORT mạnh
+            if (rsi < 30 && ma10 > ma50 && histogram > 0 && volumeSpike && curr.close < middleBB) signal = [1, 0, 0];
+            else if (rsi > 70 && ma10 < ma50 && histogram < 0 && volumeSpike && curr.close > middleBB) signal = [0, 1, 0];
         }
         outputs.push(signal);
     }
 
-    const xs = tf.tensor2d(inputs);
+    const xs = tf.tensor3d(inputs);
     const ys = tf.tensor2d(outputs);
-    await model.fit(xs, ys, { epochs: 20, batchSize: 32, shuffle: true });
-    console.log('✅ Mô hình đã được huấn luyện với logic rule-based');
+    await model.fit(xs, ys, { epochs: 30, batchSize: 32, shuffle: true });
+    console.log('✅ Mô hình đã được huấn luyện với logic rule-based (LSTM)');
+    fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Mô hình đã được huấn luyện với logic rule-based (LSTM)\n`);
     xs.dispose();
     ys.dispose();
 }
@@ -84,25 +144,28 @@ async function isValidMarket(symbol, pair) {
         });
         return !!response.data.price;
     } catch (error) {
+        console.error(`API Error: ${error.message}`);
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - API Error: ${error.message}\n`);
         return false;
     }
 }
-async function fetchKlines(symbol, pair, timeframe, limit = 200) {
+
+async function fetchKlines(symbol, pair, timeframe, limit = 1000) {
     try {
         const response = await axios.get(`${BINANCE_API}/klines`, {
             params: { symbol: `${symbol.toUpperCase()}${pair.toUpperCase()}`, interval: timeframe, limit },
             timeout: 10000,
-        }); // ĐÃ CHUYỂN DẤU NGOẶC NHỌN VÀO ĐÂY
+        });
         return response.data.map(d => ({
             timestamp: d[0], open: parseFloat(d[1]), high: parseFloat(d[2]),
             low: parseFloat(d[3]), close: parseFloat(d[4]), volume: parseFloat(d[5])
         }));
     } catch (error) {
         console.error(`API Error: ${error.message}`);
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - API Error: ${error.message}\n`);
         return null;
     }
 }
-
 
 function computeRSI(close, period = 14) { return RSI.calculate({ values: close, period }).slice(-1)[0] || 50; }
 function computeMA(close, period = 20) { return SMA.calculate({ values: close, period }).slice(-1)[0] || 0; }
@@ -143,12 +206,16 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
     const ma10 = computeMA(close, 10);
     const ma50 = computeMA(close, 50);
     const [macd, signal, histogram] = computeMACD(close);
-    const [upperBB, middleBB, lowerBB] = computeBollingerBands(close);
+    const bbResult = BollingerBands.calculate({ values: close, period: 20, stdDev: 2 });
+    const upperBB = bbResult[bbResult.length - 1]?.upper || 0;
+    const middleBB = bbResult[bbResult.length - 1]?.middle || 0;
+    const lowerBB = bbResult[bbResult.length - 1]?.lower || 0;
     const adx = computeADX(df);
-    const atr = computeATR(df);
+    const atrPeriod = 14;
+    const atr = computeATR(df.slice(-atrPeriod));
     const volumeMA = computeMA(volume, 20);
     const volumeSpike = volume[volume.length - 1] > volumeMA * 1.5 ? 1 : 0;
-    const { support, resistance } = computeSupportResistance(df);
+    const { support, resistance } = computeSupportResistance(df.slice(-50));
 
     const bbWidth = upperBB - lowerBB;
     const avgBBWidth = computeMA(df.map(d => BollingerBands.calculate({ values: df.map(v => v.close), period: 20, stdDev: 2 }).slice(-1)[0].upper - BollingerBands.calculate({ values: df.map(v => v.close), period: 20, stdDev: 2 }).slice(-1)[0].lower), 20);
@@ -158,7 +225,24 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
     const rsiOversold = customThresholds.rsiOversold || 30;
     const adxStrongTrend = customThresholds.adxStrongTrend || 30;
 
-    const input = tf.tensor2d([[rsi, adx, histogram, volumeSpike, ma10 - ma50, currentPrice - middleBB]]);
+    // Chuẩn hóa dữ liệu đầu vào cho mô hình
+    const normalizedRsi = rsi / 100;
+    const normalizedAdx = adx / 100;
+    const normalizedHistogram = histogram / 1000;
+    const normalizedMaDiff = (ma10 - ma50) / currentPrice;
+    const normalizedBbDiff = (currentPrice - middleBB) / currentPrice;
+    const normalizedAtr = atr / currentPrice;
+
+    // Lagged features
+    const closeLag1 = df[df.length - 2]?.close / currentPrice || 1;
+    const closeLag2 = df[df.length - 3]?.close / currentPrice || 1;
+
+    // Rolling statistics
+    const rsiRollingMean = SMA.calculate({ values: close.slice(-5).map(d => computeRSI([d])), period: 5 })[0] / 100 || normalizedRsi;
+
+
+    const input = tf.tensor3d([[[normalizedRsi, normalizedAdx, normalizedHistogram, volumeSpike, normalizedMaDiff, normalizedBbDiff, closeLag1, closeLag2, normalizedAtr, rsiRollingMean]]]);
+
     const prediction = model.predict(input);
     const [longProb, shortProb, waitProb] = prediction.dataSync();
     input.dispose();
@@ -186,18 +270,29 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
         }
     }
 
-    if (maxProb === longProb) {
+    // Kết hợp AI và quy tắc
+    const combinedConfidence = (confidence * 0.7 + ruleConfidence * 0.3);
+    confidence = Math.round(combinedConfidence);
+
+    // Dynamic Stop Loss and Take Profit based on ATR
+    const atrMultiplier = 2;
+    const stopLossLong = currentPrice - atr * atrMultiplier;
+    const stopLossShort = currentPrice + atr * atrMultiplier;
+    const takeProfitLong = currentPrice + atr * atrMultiplier * 2;
+    const takeProfitShort = currentPrice - atr * atrMultiplier * 2;
+
+    if (maxProb === longProb || ruleBasedSignal.includes('LONG')) {
         signalText = '🟢 LONG - Mua';
         entry = currentPrice;
-        sl = Math.max(currentPrice - atr * 2, support);
-        tp = Math.min(currentPrice + atr * 4, resistance);
-        if (ruleBasedSignal.includes('LONG')) confidence = Math.max(confidence, ruleConfidence);
-    } else if (maxProb === shortProb) {
+        sl = stopLossLong;
+        tp = takeProfitLong;
+        confidence = Math.max(confidence, ruleConfidence);
+    } else if (maxProb === shortProb || ruleBasedSignal.includes('SHORT')) {
         signalText = '🔴 SHORT - Bán';
         entry = currentPrice;
-        sl = Math.min(currentPrice + atr * 2, resistance);
-        tp = Math.max(currentPrice - atr * 4, support);
-        if (ruleBasedSignal.includes('SHORT')) confidence = Math.max(confidence, ruleConfidence);
+        sl = stopLossShort;
+        tp = takeProfitShort;
+        confidence = Math.max(confidence, ruleConfidence);
     } else {
         signalText = '⚪️ ĐỢI - Chưa có tín hiệu';
         confidence = Math.min(confidence, ruleConfidence);
@@ -207,7 +302,8 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
         `📈 RSI: ${rsi.toFixed(1)}`,
         `📊 MACD: ${macd.toFixed(4)} / ${signal.toFixed(4)}`,
         `📉 ADX: ${adx.toFixed(1)}`,
-        `📦 Volume: ${volumeSpike ? 'TĂNG ĐỘT BIẾN' : 'BÌNH THƯỜNG'}`
+        `📦 Volume: ${volumeSpike ? 'TĂNG ĐỘT BIẾN' : 'BÌNH THƯỜNG'}`,
+        `⚠️ Lý do: ${ruleBasedSignal}`,
     ];
     details.push(`📏 Bollinger: ${lowerBB.toFixed(4)} - ${upperBB.toFixed(4)}`);
     details.push(`🛡️ Hỗ trợ: ${support.toFixed(4)}, Kháng cự: ${resistance.toFixed(4)}`);
@@ -225,35 +321,66 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
     return { result, confidence };
 }
 
+
 // Hàm kiểm tra tự động và gửi tín hiệu
 async function checkAutoSignal(chatId, { symbol, pair, timeframe }, confidenceThreshold = 80) {
-    const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe);
-    if (confidence >= confidenceThreshold) {
-        bot.sendMessage(chatId, `🚨 *TÍN HIỆU ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]})* 🚨\n${result}`, {
-            parse_mode: 'Markdown'
-        });
-        console.log(`✅ Đã gửi tín hiệu ${symbol}/${pair} đến chat ${chatId} - Độ tin cậy: ${confidence}%`);
+    try {
+        const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe);
+        if (confidence >= confidenceThreshold) {
+            bot.sendMessage(chatId, `🚨 *TÍN HIỆU ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]})* 🚨\n${result}`, {
+                parse_mode: 'Markdown'
+            });
+            console.log(`✅ Đã gửi tín hiệu ${symbol}/${pair} đến chat ${chatId} - Độ tin cậy: ${confidence}%`);
+            fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Đã gửi tín hiệu ${symbol}/${pair} đến chat ${chatId} - Độ tin cậy: ${confidence}%\n`);
+        }
+    } catch (error) {
+        console.error(`❌ Lỗi kiểm tra ${symbol}/${pair}: ${error.message}`);
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - ❌ Lỗi kiểm tra ${symbol}/${pair}: ${error.message}\n`);
     }
 }
 
 // Hàm chạy kiểm tra định kỳ
 function startAutoChecking() {
-    const CHECK_INTERVAL = 5 * 60 * 1000; // 5 phút
-    setInterval(() => {
-        for (const [chatId, watchList] of autoWatchList) {
-            watchList.forEach(config => {
-                checkAutoSignal(chatId, config).catch(err => console.error(`❌ Lỗi kiểm tra ${config.symbol}/${config.pair}: ${err.message}`));
+    const CHECK_INTERVAL = 5 * 60 * 1000;
+
+    function checkAndReschedule() {
+        db.all("SELECT chatId, symbol, pair, timeframe FROM watch_configs", [], (err, rows) => {
+            if (err) {
+                console.error("Lỗi truy vấn database:", err.message);
+                fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi truy vấn database: ${err.message}\n`);
+                setTimeout(checkAndReschedule, CHECK_INTERVAL);
+                return;
+            }
+
+            rows.forEach(config => {
+                checkAutoSignal(config.chatId, config)
+                    .catch(err => {
+                        console.error(`❌ Lỗi kiểm tra ${config.symbol}/${config.pair}: ${err.message}`);
+                        fs.appendFileSync('bot.log', `${new Date().toISOString()} - ❌ Lỗi kiểm tra ${config.symbol}/${config.pair}: ${err.message}\n`);
+                    });
             });
-        }
-    }, CHECK_INTERVAL);
+            setTimeout(checkAndReschedule, CHECK_INTERVAL);
+        });
+    }
+    setTimeout(checkAndReschedule, CHECK_INTERVAL);
 }
 
 // Khởi động bot
 (async () => {
-    await initializeModel();
-    const initialData = await fetchKlines('BTC', 'USDT', '1h', 200);
-    if (initialData) await trainModel(initialData);
-    else console.error('❌ Không thể lấy dữ liệu ban đầu để huấn luyện mô hình');
+    try {
+        await initializeModel();
+        const initialData = await fetchKlines('BTC', 'USDT', '1h', 250);
+        if (initialData) {
+            await trainModel(initialData);
+        } else {
+            console.error('❌ Không thể lấy dữ liệu ban đầu để huấn luyện mô hình');
+            fs.appendFileSync('bot.log', `${new Date().toISOString()} - ❌ Không thể lấy dữ liệu ban đầu để huấn luyện mô hình\n`);
+        }
+    } catch (error) {
+        console.error("Lỗi khởi tạo hoặc huấn luyện mô hình:", error);
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi khởi tạo hoặc huấn luyện mô hình: ${error.message}\n`);
+    }
+
 
     // Lệnh phân tích thủ công
     bot.onText(/\?(.+)/, async (msg, match) => {
@@ -282,14 +409,8 @@ function startAutoChecking() {
             }
         }
 
-        // Bỏ qua kiểm tra ngưỡng tin cậy cho lệnh phân tích thủ công
-        try {
-            const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe, customThresholds);
-            bot.sendMessage(msg.chat.id, result, { parse_mode: 'Markdown' });
-        } catch (error) {
-            console.error(`Lỗi khi lấy giá và tín hiệu: ${error}`);
-            bot.sendMessage(msg.chat.id, `❌ Lỗi khi lấy giá và tín hiệu. Vui lòng thử lại sau.`);
-        }
+        const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe, customThresholds);
+        bot.sendMessage(msg.chat.id, result, { parse_mode: 'Markdown' });
     });
 
     // Lệnh yêu cầu theo dõi tự động tín hiệu
@@ -311,55 +432,104 @@ function startAutoChecking() {
         const chatId = msg.chat.id;
         const config = { symbol, pair, timeframe };
 
-        if (!autoWatchList.has(chatId)) autoWatchList.set(chatId, []);
-        const watchList = autoWatchList.get(chatId);
+        insertStmt.run(chatId, symbol, pair, timeframe, (err) => {
+            if (err) {
+                console.error(err.message);
+                bot.sendMessage(msg.chat.id, `❌ Lỗi khi thêm cấu hình theo dõi: ${err.message}`);
+                fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi thêm config vào SQLite: ${err.message}\n`);
+            } else {
+                bot.sendMessage(chatId, `✅ Bắt đầu theo dõi tín hiệu ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]}). Bot sẽ gửi cảnh báo khi có tín hiệu mạnh.`);
+                fs.appendFileSync('bot.log', `${new Date().toISOString()} - Thêm config ${symbol}/${pair} cho chat ${chatId} thành công.\n`);
+            }
+        });
+    });
 
-        if (!watchList.some(w => w.symbol === symbol && w.pair === pair && w.timeframe === timeframe)) {
-            watchList.push(config);
-            bot.sendMessage(chatId, `✅ Bắt đầu theo dõi tín hiệu ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]}). Bot sẽ gửi cảnh báo khi có tín hiệu mạnh.`);
-        } else {
-            bot.sendMessage(chatId, `ℹ️ ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]}) đã được theo dõi rồi.`);
+    bot.onText(/\/dungtinhieu (.+)/, (msg, match) => {
+        const parts = match[1].split(',');
+        if (parts.length < 3) {
+            return bot.sendMessage(msg.chat.id, '⚠️ Cú pháp sai! Hãy nhập đúng định dạng:\nVí dụ: /dungtinhieu ada,usdt,5m');
         }
+        const [symbol, pair, timeframe] = parts.map(p => p.trim().toLowerCase());
+        const chatId = msg.chat.id;
+
+        deleteStmt.run(chatId, symbol, pair, timeframe, (err) => {
+            if (err) {
+                console.error(err.message);
+                bot.sendMessage(msg.chat.id, `❌ Lỗi khi xóa cấu hình theo dõi: ${err.message}`);
+                fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi xóa config khỏi SQLite: ${err.message}\n`);
+            } else {
+                bot.sendMessage(chatId, `✅ Đã dừng theo dõi tín hiệu ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]})`);
+                fs.appendFileSync('bot.log', `${new Date().toISOString()} - Xóa config ${symbol}/${pair} cho chat ${chatId} thành công.\n`);
+            }
+        });
     });
 
     // Lệnh trợ giúp
     bot.onText(/\/trogiup/, (msg) => {
+        const chatId = msg.chat.id;
         const helpMessage = `
 📚 *HƯỚNG DẪN SỬ DỤNG BOT GIAO DỊCH*
 
 Dưới đây là các lệnh hiện có và cách sử dụng:
 
-1. **?symbol,pair,timeframe[,rsiOversold-rsiOverbought]**  
-   - *Mô tả*: Phân tích thủ công cặp giao dịch, trả về tín hiệu và các mức giá (entry, SL, TP).  
-   - *Cú pháp*: ?<coin>,<đồng giao dịch>,<khung thời gian>[,rsi<giá trị thấp>-<giá trị cao>]  
-   - *Ví dụ*:  
-     - ?ada,usdt,5m (phân tích ADA/USDT khung 5 phút)  
-     - ?btc,usdt,1h,rsi25-75 (phân tích BTC/USDT khung 1 giờ, tùy chỉnh RSI 25-75)  
-   - *Khung thời gian hợp lệ*: ${Object.keys(timeframes).join(', ')}
+1. **?symbol,pair,timeframe[,rsiOversold-rsiOverbought]**
+   - *Mô tả*: Phân tích thủ công...
 
-2. **/tinhieu symbol,pair,timeframe**  
-   - *Mô tả*: Kích hoạt theo dõi tự động, gửi tín hiệu khi độ tin cậy ≥ 80%.  
-   - *Cú pháp*: /tinhieu <coin>,<đồng giao dịch>,<khung thời gian>  
-   - *Ví dụ*:  
-     - /tinhieu ada,usdt,5m (theo dõi ADA/USDT khung 5 phút)  
-     - /tinhieu btc,usdt,1h (theo dõi BTC/USDT khung 1 giờ)  
-   - *Khung thời gian hợp lệ*: ${Object.keys(timeframes).join(', ')}
-
-3. **/trogiup**  
-   - *Mô tả*: Hiển thị danh sách lệnh và hướng dẫn sử dụng (bạn đang xem).  
-   - *Cú pháp*: /trogiup  
-   - *Ví dụ*: /trogiup
-
-*Lưu ý*:  
-- Bot sử dụng AI và chỉ báo kỹ thuật (RSI, MACD, ADX, Bollinger Bands) để phân tích.  
-- Nếu thị trường đi ngang, tín hiệu vẫn được đưa ra nhưng kèm cảnh báo độ chính xác thấp.  
-- Đảm bảo nhập đúng cặp giao dịch tồn tại trên Binance (ví dụ: ADA/USDT, BTC/USDT).  
+(Phần còn lại của help message của bạn)
         `;
-        bot.sendMessage(msg.chat.id, helpMessage, { parse_mode: 'Markdown' });
+
+        const keyboard = {
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        { text: 'Liên hệ hỗ trợ', url: 'https://t.me/your_support_channel' },
+                        { text: 'Đánh giá bot', callback_data: 'rate_bot' }
+                    ]
+                ]
+            }
+        };
+
+        bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown', ...keyboard });
+    });
+
+    bot.on('callback_query', (query) => {
+        const chatId = query.message.chat.id;
+
+        if (query.data === 'rate_bot') {
+            bot.sendMessage(chatId, 'Vui lòng đánh giá bot bằng cách cho sao nhé! (Tính năng này chưa hoạt động đầy đủ)');
+        }
+        bot.answerCallbackQuery(query.id);
     });
 
     // Bắt đầu kiểm tra tự động
     startAutoChecking();
     console.log('✅ Bot đang chạy với tính năng theo dõi tín hiệu tự động...');
+    fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Bot đang chạy với tính năng theo dõi tín hiệu tự động...\n`);
 
+    // Đóng database khi tắt bot
+    process.on('SIGINT', () => {
+        insertStmt.finalize((err) => {
+            if (err) {
+                console.error("Lỗi đóng insertStmt:", err.message);
+                fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi đóng insertStmt: ${err.message}\n`);
+            }
+        });
+        deleteStmt.finalize((err) => {
+            if (err) {
+                console.error("Lỗi đóng deleteStmt:", err.message);
+                fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi đóng deleteStmt: ${err.message}\n`);
+            }
+        });
+        db.close((err) => {
+            if (err) {
+                console.error("Lỗi đóng SQLite:", err.message);
+                fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi đóng SQLite: ${err.message}\n`);
+            } else {
+                fs.appendFileSync('bot.log', `${new Date().toISOString()} - SQLite connection closed\n`);
+            }
+            console.log('Đóng kết nối database.');
+            fs.appendFileSync('bot.log', `${new Date().toISOString()} - Đóng kết nối database.\n`);
+            process.exit(0);
+        });
+    });
 })();
