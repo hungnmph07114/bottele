@@ -2,136 +2,61 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const { RSI, SMA, MACD, BollingerBands, ADX, ATR } = require('technicalindicators');
 const tf = require('@tensorflow/tfjs');
-const fs = require('fs').promises;
 
 // Configuration
 const TOKEN = '7605131321:AAGCW_FWEqBC7xMOt8RwL4nek4vqxPBVluY';
 const BINANCE_API = 'https://api.binance.com/api/v3';
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-// Danh sách khung thời gian Binance hỗ trợ
-const validTimeframes = {
-    '1m': '1 phút', '3m': '3 phút', '5m': '5 phút', '15m': '15 phút', '30m': '30 phút',
-    '1h': '1 giờ', '2h': '2 giờ', '4h': '4 giờ', '6h': '6 giờ', '8h': '8 giờ', '12h': '12 giờ',
-    '1d': '1 ngày', '3d': '3 ngày', '1w': '1 tuần', '1M': '1 tháng'
-};
+const timeframes = { '1m': '1 phút', '5m': '5 phút', '15m': '15 phút', '1h': '1 giờ', '4h': '4 giờ', '1d': '1 ngày' };
 
-// Danh sách theo dõi tự động và lịch sử tín hiệu
+// Danh sách theo dõi tự động (chatId -> [{symbol, pair, timeframe}])
 const autoWatchList = new Map();
-const signalHistory = new Map(); // chatId -> [{symbol, pair, timeframe, signal, confidence, timestamp}]
-const WATCHLIST_FILE = './watchlist.json';
-const HISTORY_FILE = './signal_history.json';
 
-// Khởi tạo mô hình LSTM
+// Khởi tạo mô hình TensorFlow.js
 let model;
 async function initializeModel() {
     model = tf.sequential();
-    model.add(tf.layers.lstm({ units: 50, inputShape: [10, 6], returnSequences: true }));
-    model.add(tf.layers.lstm({ units: 20 }));
+    model.add(tf.layers.dense({ units: 50, activation: 'relu', inputShape: [6] }));
+    model.add(tf.layers.dense({ units: 20, activation: 'relu' }));
     model.add(tf.layers.dense({ units: 3, activation: 'softmax' }));
     model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy', metrics: ['accuracy'] });
-    console.log('✅ Mô hình LSTM đã được khởi tạo');
+    console.log('✅ Mô hình TensorFlow.js đã được khởi tạo');
 }
 
-// Huấn luyện mô hình với dữ liệu đa dạng
-async function trainModel() {
-    const pairs = ['BTCUSDT', 'ETHUSDT', 'ADAUSDT'];
-    const timeframes = ['1h', '4h', '1d'];
+// Huấn luyện mô hình với nhãn từ logic rule-based
+async function trainModel(data) {
     const inputs = [];
     const outputs = [];
+    for (let i = 1; i < data.length; i++) {
+        const curr = data[i];
+        const close = data.slice(0, i).map(d => d.close);
+        const volume = data.slice(0, i).map(d => d.volume);
+        const rsi = computeRSI(close);
+        const ma10 = computeMA(close, 10);
+        const ma50 = computeMA(close, 50);
+        const [, , histogram] = computeMACD(close);
+        const [, middleBB] = computeBollingerBands(close);
+        const adx = computeADX(data.slice(0, i));
+        const volumeMA = computeMA(volume, 20);
+        const volumeSpike = curr.volume > volumeMA * 1.5 ? 1 : 0;
 
-    for (const pair of pairs) {
-        for (const timeframe of timeframes) {
-            const data = await fetchKlines(pair.slice(0, -4), pair.slice(-4), timeframe, 500);
-            if (!data) continue;
+        inputs.push([rsi, adx, histogram, volumeSpike, ma10 - ma50, curr.close - middleBB]);
 
-            for (let i = 10; i < data.length; i++) {
-                const window = data.slice(i - 10, i);
-                const curr = data[i];
-                const close = window.map(d => d.close);
-                const volume = window.map(d => d.volume);
-                const rsi = computeRSI(close);
-                const ma10 = computeMA(close, 10);
-                const ma50 = computeMA(close, 50);
-                const [, , histogram] = computeMACD(close);
-                const [, middleBB] = computeBollingerBands(close);
-                const adx = computeADX(window);
-                const volumeMA = computeMA(volume, 20);
-                const volumeSpike = curr.volume > volumeMA * 1.5 ? 1 : 0;
-
-                const input = window.map(d => [
-                    RSI.calculate({ values: window.map(w => w.close), period: 14 }).slice(-1)[0] || 50,
-                    computeADX(window),
-                    MACD.calculate({ values: window.map(w => w.close), fastPeriod: 12, slowPeriod: 26, signalPeriod: 9 }).slice(-1)[0]?.histogram || 0,
-                    d.volume > computeMA(window.map(w => w.volume), 20) * 1.5 ? 1 : 0,
-                    computeMA(window.map(w => w.close), 10) - computeMA(window.map(w => w.close), 50),
-                    d.close - computeBollingerBands(window.map(w => w.close))[1]
-                ]);
-                inputs.push(input);
-
-                let signal = [0, 0, 1];
-                if (adx > 30) {
-                    if (rsi < 30 && ma10 > ma50 && histogram > 0 && volumeSpike && curr.close < middleBB) signal = [1, 0, 0];
-                    else if (rsi > 70 && ma10 < ma50 && histogram < 0 && volumeSpike && curr.close > middleBB) signal = [0, 1, 0];
-                }
-                outputs.push(signal);
-            }
+        let signal = [0, 0, 1]; // ĐỢI mặc định
+        if (adx > 30) {
+            if (rsi < 30 && ma10 > ma50 && histogram > 0 && volumeSpike && curr.close < middleBB) signal = [1, 0, 0]; // LONG mạnh
+            else if (rsi > 70 && ma10 < ma50 && histogram < 0 && volumeSpike && curr.close > middleBB) signal = [0, 1, 0]; // SHORT mạnh
         }
+        outputs.push(signal);
     }
 
-    const trainSize = Math.floor(inputs.length * 0.8);
-    const xsTrain = tf.tensor3d(inputs.slice(0, trainSize));
-    const ysTrain = tf.tensor2d(outputs.slice(0, trainSize));
-    const xsTest = tf.tensor3d(inputs.slice(trainSize));
-    const ysTest = tf.tensor2d(outputs.slice(trainSize));
-
-    await model.fit(xsTrain, ysTrain, {
-        epochs: 20,
-        batchSize: 32,
-        shuffle: true,
-        validationData: [xsTest, ysTest],
-        callbacks: {
-            onEpochEnd: (epoch, logs) => console.log(`Epoch ${epoch}: Loss = ${logs.loss}, Accuracy = ${logs.acc}, Val Accuracy = ${logs.val_acc}`)
-        }
-    });
-
-    console.log('✅ Mô hình đã được huấn luyện với dữ liệu đa dạng');
-    xsTrain.dispose();
-    ysTrain.dispose();
-    xsTest.dispose();
-    ysTest.dispose();
-}
-
-// Lưu và tải watchlist
-async function saveWatchList() {
-    const data = Array.from(autoWatchList.entries()).map(([chatId, list]) => ({ chatId, list }));
-    await fs.writeFile(WATCHLIST_FILE, JSON.stringify(data));
-}
-
-async function loadWatchList() {
-    try {
-        const data = await fs.readFile(WATCHLIST_FILE, 'utf8');
-        const parsed = JSON.parse(data);
-        parsed.forEach(({ chatId, list }) => autoWatchList.set(chatId, list));
-    } catch (error) {
-        console.log('ℹ️ Không có watchlist cũ để tải');
-    }
-}
-
-// Lưu và tải lịch sử tín hiệu
-async function saveSignalHistory() {
-    const data = Array.from(signalHistory.entries()).map(([chatId, list]) => ({ chatId, list }));
-    await fs.writeFile(HISTORY_FILE, JSON.stringify(data));
-}
-
-async function loadSignalHistory() {
-    try {
-        const data = await fs.readFile(HISTORY_FILE, 'utf8');
-        const parsed = JSON.parse(data);
-        parsed.forEach(({ chatId, list }) => signalHistory.set(chatId, list));
-    } catch (error) {
-        console.log('ℹ️ Không có lịch sử tín hiệu cũ để tải');
-    }
+    const xs = tf.tensor2d(inputs);
+    const ys = tf.tensor2d(outputs);
+    await model.fit(xs, ys, { epochs: 20, batchSize: 32, shuffle: true });
+    console.log('✅ Mô hình đã được huấn luyện với logic rule-based');
+    xs.dispose();
+    ys.dispose();
 }
 
 // Kiểm tra cặp giao dịch hợp lệ
@@ -191,9 +116,8 @@ function computeSupportResistance(data) {
     return { support, resistance };
 }
 
-async function getCryptoAnalysis(chatId, symbol, pair, timeframe, customThresholds = {}) {
-    bot.sendMessage(chatId, '⏳ Đang phân tích...');
-    const df = await fetchKlines(symbol, pair, timeframe, 210);
+async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {}) {
+    const df = await fetchKlines(symbol, pair, timeframe);
     if (!df) return { result: '❗ Không thể lấy dữ liệu', confidence: 0 };
 
     const close = df.map(d => d.close);
@@ -202,8 +126,7 @@ async function getCryptoAnalysis(chatId, symbol, pair, timeframe, customThreshol
     const rsi = computeRSI(close);
     const ma10 = computeMA(close, 10);
     const ma50 = computeMA(close, 50);
-    const ma200 = computeMA(close, 200);
-    const [macd, signalLine, histogram] = computeMACD(close);
+    const [macd, signal, histogram] = computeMACD(close);
     const [upperBB, middleBB, lowerBB] = computeBollingerBands(close);
     const adx = computeADX(df);
     const atr = computeATR(df);
@@ -212,24 +135,14 @@ async function getCryptoAnalysis(chatId, symbol, pair, timeframe, customThreshol
     const { support, resistance } = computeSupportResistance(df);
 
     const bbWidth = upperBB - lowerBB;
-    const avgBBWidth = computeMA(df.map(d => {
-        const bb = BollingerBands.calculate({ values: df.map(v => v.close), period: 20, stdDev: 2 });
-        return bb[bb.length - 1].upper - bb[bb.length - 1].lower;
-    }), 20);
+    const avgBBWidth = computeMA(df.map(d => BollingerBands.calculate({ values: df.map(v => v.close), period: 20, stdDev: 2 }).slice(-1)[0].upper - BollingerBands.calculate({ values: df.map(v => v.close), period: 20, stdDev: 2 }).slice(-1)[0].lower), 20);
     const isSideways = adx < 20 && bbWidth < avgBBWidth * 0.8;
 
     const rsiOverbought = customThresholds.rsiOverbought || 70;
     const rsiOversold = customThresholds.rsiOversold || 30;
     const adxStrongTrend = customThresholds.adxStrongTrend || 30;
 
-    const input = tf.tensor3d([df.slice(-10).map(d => [
-        RSI.calculate({ values: df.slice(-14).map(w => w.close), period: 14 }).slice(-1)[0] || 50,
-        computeADX(df.slice(-14)),
-        MACD.calculate({ values: df.slice(-26).map(w => w.close), fastPeriod: 12, slowPeriod: 26, signalPeriod: 9 }).slice(-1)[0]?.histogram || 0,
-        d.volume > computeMA(df.slice(-20).map(w => w.volume), 20) * 1.5 ? 1 : 0,
-        computeMA(df.slice(-10).map(w => w.close), 10) - computeMA(df.slice(-50).map(w => w.close), 50),
-        d.close - computeBollingerBands(df.slice(-20).map(w => w.close))[1]
-    ])]);
+    const input = tf.tensor2d([[rsi, adx, histogram, volumeSpike, ma10 - ma50, currentPrice - middleBB]]);
     const prediction = model.predict(input);
     const [longProb, shortProb, waitProb] = prediction.dataSync();
     input.dispose();
@@ -276,10 +189,9 @@ async function getCryptoAnalysis(chatId, symbol, pair, timeframe, customThreshol
 
     let details = [
         `📈 RSI: ${rsi.toFixed(1)}`,
-        `📊 MACD: ${macd.toFixed(4)} / ${signalLine.toFixed(4)}`,
+        `📊 MACD: ${macd.toFixed(4)} / ${signal.toFixed(4)}`,
         `📉 ADX: ${adx.toFixed(1)}`,
-        `📦 Volume: ${volumeSpike ? 'TĂNG ĐỘT BIẾN' : 'BÌNH THƯỜNG'}`,
-        `📈 MA200: ${ma200.toFixed(4)} (Xu hướng dài hạn: ${currentPrice > ma200 ? 'TĂNG' : 'GIẢM'})`
+        `📦 Volume: ${volumeSpike ? 'TĂNG ĐỘT BIẾN' : 'BÌNH THƯỜNG'}`
     ];
     details.push(`📏 Bollinger: ${lowerBB.toFixed(4)} - ${upperBB.toFixed(4)}`);
     details.push(`🛡️ Hỗ trợ: ${support.toFixed(4)}, Kháng cự: ${resistance.toFixed(4)}`);
@@ -293,69 +205,54 @@ async function getCryptoAnalysis(chatId, symbol, pair, timeframe, customThreshol
         details.push(`💰 TP: ${tp.toFixed(4)}`);
     }
 
-    const result = `📊 *Phân tích ${symbol}/${pair} (${validTimeframes[timeframe] || timeframe})*\n💰 Giá: ${currentPrice.toFixed(4)}\n⚡️ *${signalText}*\n${details.join('\n')}`;
-    return { result, confidence, signalText };
+    const result = `📊 *Phân tích ${symbol}/${pair} (${timeframes[timeframe]})*\n💰 Giá: ${currentPrice.toFixed(4)}\n⚡️ *${signalText}*\n${details.join('\n')}`;
+    return { result, confidence };
 }
 
 // Hàm kiểm tra tự động và gửi tín hiệu
-async function checkAutoSignal(chatId, { symbol, pair, timeframe, confidenceThreshold = 80 }) {
-    const { result, confidence, signalText } = await getCryptoAnalysis(chatId, symbol, pair, timeframe);
+async function checkAutoSignal(chatId, { symbol, pair, timeframe }, confidenceThreshold = 80) {
+    const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe);
     if (confidence >= confidenceThreshold) {
-        bot.sendMessage(chatId, `🚨 *TÍN HIỆU ${symbol.toUpperCase()}/${pair.toUpperCase()} (${validTimeframes[timeframe] || timeframe})* 🚨\n${result}`, {
+        bot.sendMessage(chatId, `🚨 *TÍN HIỆU ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]})* 🚨\n${result}`, {
             parse_mode: 'Markdown'
         });
         console.log(`✅ Đã gửi tín hiệu ${symbol}/${pair} đến chat ${chatId} - Độ tin cậy: ${confidence}%`);
-
-        if (!signalHistory.has(chatId)) signalHistory.set(chatId, []);
-        signalHistory.get(chatId).push({ symbol, pair, timeframe, signal: signalText, confidence, timestamp: Date.now() });
-        await saveSignalHistory();
     }
 }
 
 // Hàm chạy kiểm tra định kỳ
 function startAutoChecking() {
     const CHECK_INTERVAL = 5 * 60 * 1000; // 5 phút
-    setInterval(async () => {
+    setInterval(() => {
         for (const [chatId, watchList] of autoWatchList) {
-            for (const config of watchList) {
-                await checkAutoSignal(chatId, config).catch(err => console.error(`❌ Lỗi kiểm tra ${config.symbol}/${config.pair}: ${err.message}`));
-            }
+            watchList.forEach(config => {
+                checkAutoSignal(chatId, config).catch(err => console.error(`❌ Lỗi kiểm tra ${config.symbol}/${config.pair}: ${err.message}`));
+            });
         }
-        await saveWatchList();
     }, CHECK_INTERVAL);
-}
-
-// Huấn luyện định kỳ
-function startPeriodicTraining() {
-    const TRAIN_INTERVAL = 24 * 60 * 60 * 1000; // 24 giờ
-    setInterval(async () => {
-        console.log('⏳ Bắt đầu huấn luyện lại mô hình...');
-        await trainModel();
-    }, TRAIN_INTERVAL);
 }
 
 // Khởi động bot
 (async () => {
     await initializeModel();
-    await trainModel();
-    await loadWatchList();
-    await loadSignalHistory();
+    const initialData = await fetchKlines('BTC', 'USDT', '1h', 200);
+    if (initialData) await trainModel(initialData);
+    else console.error('❌ Không thể lấy dữ liệu ban đầu để huấn luyện mô hình');
 
     // Lệnh phân tích thủ công
     bot.onText(/\?(.+)/, async (msg, match) => {
-        const chatId = msg.chat.id;
         const parts = match[1].split(',');
         if (parts.length < 3) {
-            return bot.sendMessage(chatId, '⚠️ Cú pháp sai! Hãy nhập đúng định dạng:\nVí dụ: ?ada,usdt,5m\nHoặc: ?ada,usdt,5m,rsi25-75 (tùy chọn RSI)');
+            return bot.sendMessage(msg.chat.id, '⚠️ Cú pháp sai! Hãy nhập đúng định dạng:\nVí dụ: ?ada,usdt,5m\nHoặc: ?ada,usdt,5m,rsi25-75 (tùy chọn RSI)');
         }
         const [symbol, pair, timeframe, customThreshold] = parts.map(p => p.trim().toLowerCase());
-        if (!validTimeframes[timeframe]) {
-            return bot.sendMessage(chatId, `⚠️ Khung thời gian không hợp lệ! Hãy dùng một trong các khung sau: ${Object.keys(validTimeframes).join(', ')}\nVí dụ: ?ada,usdt,5m`);
+        if (!timeframes[timeframe]) {
+            return bot.sendMessage(msg.chat.id, `⚠️ Khung thời gian không hợp lệ! Hãy dùng một trong các khung sau: ${Object.keys(timeframes).join(', ')}\nVí dụ: ?ada,usdt,5m`);
         }
 
         const isValid = await isValidMarket(symbol, pair);
         if (!isValid) {
-            return bot.sendMessage(chatId, `⚠️ Cặp giao dịch ${symbol.toUpperCase()}/${pair.toUpperCase()} không tồn tại trên Binance!\nVui lòng kiểm tra lại, ví dụ: ?ada,usdt,5m`);
+            return bot.sendMessage(msg.chat.id, `⚠️ Cặp giao dịch ${symbol.toUpperCase()}/${pair.toUpperCase()} không tồn tại trên Binance!\nVui lòng kiểm tra lại, ví dụ: ?ada,usdt,5m`);
         }
 
         let customThresholds = {};
@@ -365,108 +262,46 @@ function startPeriodicTraining() {
                 customThresholds.rsiOversold = oversold;
                 customThresholds.rsiOverbought = overbought;
             } else {
-                return bot.sendMessage(chatId, '⚠️ Định dạng RSI không hợp lệ! Hãy nhập theo kiểu: rsi25-75\nVí dụ: ?ada,usdt,5m,rsi25-75');
+                return bot.sendMessage(msg.chat.id, '⚠️ Định dạng RSI không hợp lệ! Hãy nhập theo kiểu: rsi25-75\nVí dụ: ?ada,usdt,5m,rsi25-75');
             }
         }
 
-        const { result, confidence } = await getCryptoAnalysis(chatId, symbol, pair, timeframe, customThresholds);
-        bot.sendMessage(chatId, result, { parse_mode: 'Markdown' });
+        const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe, customThresholds);
+        bot.sendMessage(msg.chat.id, result, { parse_mode: 'Markdown' });
     });
 
     // Lệnh yêu cầu theo dõi tự động tín hiệu
     bot.onText(/\/tinhieu (.+)/, async (msg, match) => {
-        const chatId = msg.chat.id;
         const parts = match[1].split(',');
         if (parts.length < 3) {
-            return bot.sendMessage(chatId, '⚠️ Cú pháp sai! Hãy nhập đúng định dạng:\nVí dụ: /tinhieu ada,usdt,5m[,90] (tùy chọn ngưỡng confidence)');
+            return bot.sendMessage(msg.chat.id, '⚠️ Cú pháp sai! Hãy nhập đúng định dạng:\nVí dụ: /tinhieu ada,usdt,5m');
         }
-        const [symbol, pair, timeframe, confidenceThreshold] = parts.map(p => p.trim().toLowerCase());
-        if (!validTimeframes[timeframe]) {
-            return bot.sendMessage(chatId, `⚠️ Khung thời gian không hợp lệ! Hãy dùng một trong các khung sau: ${Object.keys(validTimeframes).join(', ')}\nVí dụ: /tinhieu ada,usdt,5m`);
+        const [symbol, pair, timeframe] = parts.map(p => p.trim().toLowerCase());
+        if (!timeframes[timeframe]) {
+            return bot.sendMessage(msg.chat.id, `⚠️ Khung thời gian không hợp lệ! Hãy dùng một trong các khung sau: ${Object.keys(timeframes).join(', ')}\nVí dụ: /tinhieu ada,usdt,5m`);
         }
 
         const isValid = await isValidMarket(symbol, pair);
         if (!isValid) {
-            return bot.sendMessage(chatId, `⚠️ Cặp giao dịch ${symbol.toUpperCase()}/${pair.toUpperCase()} không tồn tại trên Binance!\nVui lòng kiểm tra lại, ví dụ: /tinhieu ada,usdt,5m`);
+            return bot.sendMessage(msg.chat.id, `⚠️ Cặp giao dịch ${symbol.toUpperCase()}/${pair.toUpperCase()} không tồn tại trên Binance!\nVui lòng kiểm tra lại, ví dụ: /tinhieu ada,usdt,5m`);
         }
 
-        const config = {
-            symbol,
-            pair,
-            timeframe,
-            confidenceThreshold: confidenceThreshold && !isNaN(parseInt(confidenceThreshold)) ? parseInt(confidenceThreshold) : 80
-        };
+        const chatId = msg.chat.id;
+        const config = { symbol, pair, timeframe };
 
         if (!autoWatchList.has(chatId)) autoWatchList.set(chatId, []);
         const watchList = autoWatchList.get(chatId);
 
         if (!watchList.some(w => w.symbol === symbol && w.pair === pair && w.timeframe === timeframe)) {
             watchList.push(config);
-            await saveWatchList();
-            bot.sendMessage(chatId, `✅ Bắt đầu theo dõi tín hiệu ${symbol.toUpperCase()}/${pair.toUpperCase()} (${validTimeframes[timeframe] || timeframe}) với ngưỡng confidence ${config.confidenceThreshold}%.`);
+            bot.sendMessage(chatId, `✅ Bắt đầu theo dõi tín hiệu ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]}). Bot sẽ gửi cảnh báo khi có tín hiệu mạnh.`);
         } else {
-            bot.sendMessage(chatId, `ℹ️ ${symbol.toUpperCase()}/${pair.toUpperCase()} (${validTimeframes[timeframe] || timeframe}) đã được theo dõi rồi.`);
+            bot.sendMessage(chatId, `ℹ️ ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]}) đã được theo dõi rồi.`);
         }
-    });
-
-    // Lệnh xem danh sách theo dõi
-    bot.onText(/\/danhsach/, (msg) => {
-        const chatId = msg.chat.id;
-        if (!autoWatchList.has(chatId) || autoWatchList.get(chatId).length === 0) {
-            return bot.sendMessage(chatId, 'ℹ️ Bạn chưa theo dõi cặp giao dịch nào.');
-        }
-        const watchList = autoWatchList.get(chatId);
-        const listText = watchList.map(w => `${w.symbol.toUpperCase()}/${w.pair.toUpperCase()} (${validTimeframes[w.timeframe] || w.timeframe}, ngưỡng: ${w.confidenceThreshold}%)`).join('\n');
-        bot.sendMessage(chatId, `📋 *Danh sách theo dõi tự động:*\n${listText}`, { parse_mode: 'Markdown' });
-    });
-
-    // Lệnh dừng theo dõi
-    bot.onText(/\/dungtinhieu (.+)/, async (msg, match) => {
-        const chatId = msg.chat.id;
-        const parts = match[1].split(',');
-        if (parts.length < 3) {
-            return bot.sendMessage(chatId, '⚠️ Cú pháp sai! Hãy nhập đúng định dạng:\nVí dụ: /dungtinhieu ada,usdt,5m');
-        }
-        const [symbol, pair, timeframe] = parts.map(p => p.trim().toLowerCase());
-        if (!validTimeframes[timeframe]) {
-            return bot.sendMessage(chatId, `⚠️ Khung thời gian không hợp lệ! Hãy dùng một trong các khung sau: ${Object.keys(validTimeframes).join(', ')}\nVí dụ: /dungtinhieu ada,usdt,5m`);
-        }
-
-        if (!autoWatchList.has(chatId)) {
-            return bot.sendMessage(chatId, 'ℹ️ Bạn chưa theo dõi cặp nào.');
-        }
-
-        const watchList = autoWatchList.get(chatId);
-        const index = watchList.findIndex(w => w.symbol === symbol && w.pair === pair && w.timeframe === timeframe);
-        if (index !== -1) {
-            watchList.splice(index, 1);
-            if (watchList.length === 0) autoWatchList.delete(chatId);
-            await saveWatchList();
-            bot.sendMessage(chatId, `✅ Đã dừng theo dõi ${symbol.toUpperCase()}/${pair.toUpperCase()} (${validTimeframes[timeframe] || timeframe}).`);
-        } else {
-            bot.sendMessage(chatId, `ℹ️ Không tìm thấy ${symbol.toUpperCase()}/${pair.toUpperCase()} (${validTimeframes[timeframe] || timeframe}) trong danh sách theo dõi.`);
-        }
-    });
-
-    // Lệnh xem lịch sử tín hiệu
-    bot.onText(/\/lichsu/, (msg) => {
-        const chatId = msg.chat.id;
-        if (!signalHistory.has(chatId) || signalHistory.get(chatId).length === 0) {
-            return bot.sendMessage(chatId, 'ℹ️ Chưa có tín hiệu nào được ghi nhận trong 24 giờ qua.');
-        }
-
-        const history = signalHistory.get(chatId).filter(s => Date.now() - s.timestamp < 24 * 60 * 60 * 1000);
-        if (history.length === 0) {
-            return bot.sendMessage(chatId, 'ℹ️ Không có tín hiệu nào trong 24 giờ qua.');
-        }
-
-        const historyText = history.map(s => `${s.signal} - ${s.symbol.toUpperCase()}/${s.pair.toUpperCase()} (${validTimeframes[s.timeframe] || s.timeframe}) - ${s.confidence}% (${new Date(s.timestamp).toLocaleString()})`).join('\n');
-        bot.sendMessage(chatId, `📜 *Lịch sử tín hiệu (24h qua):*\n${historyText}`, { parse_mode: 'Markdown' });
     });
 
     // Lệnh trợ giúp
     bot.onText(/\/trogiup/, (msg) => {
-        const chatId = msg.chat.id;
         const helpMessage = `
 📚 *HƯỚNG DẪN SỬ DỤNG BOT GIAO DỊCH*
 
@@ -476,47 +311,32 @@ Dưới đây là các lệnh hiện có và cách sử dụng:
    - *Mô tả*: Phân tích thủ công cặp giao dịch, trả về tín hiệu và các mức giá (entry, SL, TP).  
    - *Cú pháp*: ?<coin>,<đồng giao dịch>,<khung thời gian>[,rsi<giá trị thấp>-<giá trị cao>]  
    - *Ví dụ*:  
-     - ?ada,usdt,5m  
-     - ?btc,usdt,1h,rsi25-75  
+     - ?ada,usdt,5m (phân tích ADA/USDT khung 5 phút)  
+     - ?btc,usdt,1h,rsi25-75 (phân tích BTC/USDT khung 1 giờ, tùy chỉnh RSI 25-75)  
+   - *Khung thời gian hợp lệ*: ${Object.keys(timeframes).join(', ')}
 
-2. **/tinhieu symbol,pair,timeframe[,confidenceThreshold]**  
-   - *Mô tả*: Kích hoạt theo dõi tự động, gửi tín hiệu khi độ tin cậy ≥ ngưỡng (mặc định 80%).  
-   - *Cú pháp*: /tinhieu <coin>,<đồng giao dịch>,<khung thời gian>[,<ngưỡng confidence>]  
+2. **/tinhieu symbol,pair,timeframe**  
+   - *Mô tả*: Kích hoạt theo dõi tự động, gửi tín hiệu khi độ tin cậy ≥ 80%.  
+   - *Cú pháp*: /tinhieu <coin>,<đồng giao dịch>,<khung thời gian>  
    - *Ví dụ*:  
-     - /tinhieu ada,usdt,5m  
-     - /tinhieu btc,usdt,1h,90  
+     - /tinhieu ada,usdt,5m (theo dõi ADA/USDT khung 5 phút)  
+     - /tinhieu btc,usdt,1h (theo dõi BTC/USDT khung 1 giờ)  
+   - *Khung thời gian hợp lệ*: ${Object.keys(timeframes).join(', ')}
 
-3. **/danhsach**  
-   - *Mô tả*: Xem danh sách các cặp đang theo dõi tự động.  
-   - *Cú pháp*: /danhsach  
-   - *Ví dụ*: /danhsach  
-
-4. **/dungtinhieu symbol,pair,timeframe**  
-   - *Mô tả*: Dừng theo dõi tự động một cặp giao dịch.  
-   - *Cú pháp*: /dungtinhieu <coin>,<đồng giao dịch>,<khung thời gian>  
-   - *Ví dụ*: /dungtinhieu ada,usdt,5m  
-
-5. **/lichsu**  
-   - *Mô tả*: Xem lịch sử tín hiệu trong 24 giờ qua.  
-   - *Cú pháp*: /lichsu  
-   - *Ví dụ*: /lichsu  
-
-6. **/trogiup**  
-   - *Mô tả*: Hiển thị hướng dẫn này.  
+3. **/trogiup**  
+   - *Mô tả*: Hiển thị danh sách lệnh và hướng dẫn sử dụng (bạn đang xem).  
    - *Cú pháp*: /trogiup  
-   - *Ví dụ*: /trogiup  
+   - *Ví dụ*: /trogiup
 
-*Khung thời gian hợp lệ*: ${Object.keys(validTimeframes).join(', ')}  
 *Lưu ý*:  
-- Bot sử dụng AI (LSTM) và chỉ báo kỹ thuật để phân tích.  
-- Mô hình được huấn luyện lại mỗi 24 giờ với dữ liệu mới.  
-- Đảm bảo nhập đúng cặp giao dịch trên Binance (ví dụ: ADA/USDT).  
+- Bot sử dụng AI và chỉ báo kỹ thuật (RSI, MACD, ADX, Bollinger Bands) để phân tích.  
+- Nếu thị trường đi ngang, tín hiệu vẫn được đưa ra nhưng kèm cảnh báo độ chính xác thấp.  
+- Đảm bảo nhập đúng cặp giao dịch tồn tại trên Binance (ví dụ: ADA/USDT, BTC/USDT).  
         `;
-        bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
+        bot.sendMessage(msg.chat.id, helpMessage, { parse_mode: 'Markdown' });
     });
 
-    // Bắt đầu kiểm tra và huấn luyện
+    // Bắt đầu kiểm tra tự động
     startAutoChecking();
-    startPeriodicTraining();
-    console.log('✅ Bot đang chạy với tính năng nâng cao...');
+    console.log('✅ Bot đang chạy với tính năng theo dõi tín hiệu tự động...');
 })();
