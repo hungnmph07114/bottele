@@ -34,7 +34,7 @@ async function initializeModel() {
     model.add(tf.layers.dropout({ rate: 0.2 }));
     model.add(tf.layers.lstm({ units: 32 }));
     model.add(tf.layers.dense({ units: 3, activation: 'softmax' }));
-    model.compile({ optimizer: tf.train.adam(), loss: 'categoricalCrossentropy', metrics: ['accuracy'] });
+    model.compile({ optimizer: tf.train.adamw(), loss: 'categoricalCrossentropy', metrics: ['accuracy'] });
     console.log('✅ Mô hình AI (LSTM) đã được khởi tạo');
 }
 
