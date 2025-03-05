@@ -4,7 +4,7 @@ const { RSI, SMA, MACD, BollingerBands, ADX, ATR } = require('technicalindicator
 const tf = require('@tensorflow/tfjs');
 
 // Configuration
-const TOKEN = '7605131321:AAGCW_FWEqBC7xMOt8RwL4nek4vqxPBVluY';
+const TOKEN = '7605131321:AAGCW_FWEqBC7xMOt8RwL4nek4vqxPBVluY'; // Thay thế bằng token bot của bạn
 const BINANCE_API = 'https://api.binance.com/api/v3';
 const bot = new TelegramBot(TOKEN, { polling: true });
 
@@ -87,13 +87,12 @@ async function isValidMarket(symbol, pair) {
         return false;
     }
 }
-
 async function fetchKlines(symbol, pair, timeframe, limit = 200) {
     try {
         const response = await axios.get(`${BINANCE_API}/klines`, {
             params: { symbol: `${symbol.toUpperCase()}${pair.toUpperCase()}`, interval: timeframe, limit },
             timeout: 10000,
-        });
+        }); // ĐÃ CHUYỂN DẤU NGOẶC NHỌN VÀO ĐÂY
         return response.data.map(d => ({
             timestamp: d[0], open: parseFloat(d[1]), high: parseFloat(d[2]),
             low: parseFloat(d[3]), close: parseFloat(d[4]), volume: parseFloat(d[5])
@@ -103,6 +102,7 @@ async function fetchKlines(symbol, pair, timeframe, limit = 200) {
         return null;
     }
 }
+
 
 function computeRSI(close, period = 14) { return RSI.calculate({ values: close, period }).slice(-1)[0] || 50; }
 function computeMA(close, period = 20) { return SMA.calculate({ values: close, period }).slice(-1)[0] || 0; }
@@ -282,8 +282,14 @@ function startAutoChecking() {
             }
         }
 
-        const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe, customThresholds);
-        bot.sendMessage(msg.chat.id, result, { parse_mode: 'Markdown' });
+        // Bỏ qua kiểm tra ngưỡng tin cậy cho lệnh phân tích thủ công
+        try {
+            const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe, customThresholds);
+            bot.sendMessage(msg.chat.id, result, { parse_mode: 'Markdown' });
+        } catch (error) {
+            console.error(`Lỗi khi lấy giá và tín hiệu: ${error}`);
+            bot.sendMessage(msg.chat.id, `❌ Lỗi khi lấy giá và tín hiệu. Vui lòng thử lại sau.`);
+        }
     });
 
     // Lệnh yêu cầu theo dõi tự động tín hiệu
@@ -355,4 +361,5 @@ Dưới đây là các lệnh hiện có và cách sử dụng:
     // Bắt đầu kiểm tra tự động
     startAutoChecking();
     console.log('✅ Bot đang chạy với tính năng theo dõi tín hiệu tự động...');
+
 })();
