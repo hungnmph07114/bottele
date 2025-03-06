@@ -180,7 +180,7 @@ async function fetchKlines(symbol, pair, timeframe, limit = 200) {
     }
 }
 
-// Lấy dữ liệu lịch sử cho giả lập (giảm số cây nến xuống 200)
+// Lấy dữ liệu lịch sử cho giả lập
 async function fetchHistoricalData(symbol, pair, timeframe, limit = 200) {
     return await fetchKlines(symbol, pair, timeframe, limit);
 }
@@ -326,8 +326,8 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {},
     return { result, confidence };
 }
 
-// Tự đánh giá và huấn luyện trong giả lập (giảm tần suất huấn luyện và kiểm tra RAM)
-let trainingCounter = 0; // Đếm số lần gọi để giảm tần suất huấn luyện
+// Tự đánh giá và huấn luyện trong giả lập
+let trainingCounter = 0;
 async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
     const currentPrice = historicalSlice[historicalSlice.length - 1].close;
     const futureData = fullData.slice(currentIndex + 1, currentIndex + 11);
@@ -338,13 +338,13 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
     // Kiểm tra RAM trước khi huấn luyện
     const memoryUsage = process.memoryUsage();
     const usedMemoryMB = memoryUsage.heapUsed / 1024 / 1024;
-    if (usedMemoryMB > 450) { // Nếu RAM vượt 450 MB (90% của 512 MB)
+    if (usedMemoryMB > 450) {
         console.log(`Bỏ qua huấn luyện tại cây nến ${currentIndex} do RAM cao: ${usedMemoryMB.toFixed(2)} MB (trainingCounter: ${trainingCounter})`);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại cây nến ${currentIndex} do RAM cao: ${usedMemoryMB.toFixed(2)} MB (trainingCounter: ${trainingCounter})\n`);
         return;
     }
 
-    if (trainingCounter % 10 !== 0) { // Chỉ huấn luyện sau mỗi 10 cây nến
+    if (trainingCounter % 10 !== 0) {
         console.log(`Bỏ qua huấn luyện tại cây nến ${currentIndex} (trainingCounter: ${trainingCounter})`);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại cây nến ${currentIndex} (trainingCounter: ${trainingCounter})\n`);
         return;
@@ -393,7 +393,7 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
 
 // Giả lập dựa trên watch_configs với retry logic
 let isSimulating = false;
-let lastIndexMap = new Map(); // Lưu trữ vị trí cây nến cuối cùng của từng cấu hình
+let lastIndexMap = new Map();
 async function simulateRealTimeForConfigs(stepInterval = 1000) {
     const getConfigs = () => new Promise((resolve, reject) => {
         db.all("SELECT chatId, symbol, pair, timeframe FROM watch_configs", [], (err, rows) => {
@@ -404,7 +404,7 @@ async function simulateRealTimeForConfigs(stepInterval = 1000) {
 
     const simulateConfig = async (config) => {
         const { chatId, symbol, pair, timeframe } = config;
-        const configKey = `${chatId}_${symbol}_${pair}_${timeframe}`; // Key để lưu vị trí cây nến
+        const configKey = `${chatId}_${symbol}_${pair}_${timeframe}`;
         const historicalData = await fetchHistoricalData(symbol, pair, timeframe);
         if (!historicalData) {
             console.error(`❌ Không thể lấy dữ liệu cho ${symbol}/${pair}`);
@@ -417,7 +417,7 @@ async function simulateRealTimeForConfigs(stepInterval = 1000) {
             if (currentIndex >= historicalData.length) {
                 console.log(`✅ Hoàn tất giả lập ${symbol}/${pair} (${timeframes[timeframe]})`);
                 fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Hoàn tất giả lập ${symbol}/${pair} (${timeframes[timeframe]})\n`);
-                lastIndexMap.delete(configKey); // Xóa vị trí sau khi hoàn tất
+                lastIndexMap.delete(configKey);
                 return;
             }
 
@@ -434,13 +434,13 @@ async function simulateRealTimeForConfigs(stepInterval = 1000) {
                 }
 
                 await selfEvaluateAndTrain(historicalSlice, currentIndex, historicalData);
-                lastIndexMap.set(configKey, currentIndex + 1); // Lưu vị trí cây nến hiện tại
+                lastIndexMap.set(configKey, currentIndex + 1);
                 currentIndex++;
                 setTimeout(simulateStep, stepInterval);
             } catch (error) {
                 console.error(`Lỗi trong giả lập ${symbol}/${pair} tại cây nến ${currentIndex}: ${error.message}`);
                 fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi trong giả lập ${symbol}/${pair} tại cây nến ${currentIndex}: ${error.message}\n`);
-                setTimeout(simulateStep, 30000); // Thử lại sau 30 giây nếu có lỗi
+                setTimeout(simulateStep, 30000);
             }
         };
 
@@ -454,19 +454,43 @@ async function simulateRealTimeForConfigs(stepInterval = 1000) {
         if (configs.length === 0) {
             console.log('⚠️ Chưa có cấu hình nào để giả lập. Hãy dùng /tinhieu để thêm.');
             fs.appendFileSync('bot.log', `${new Date().toISOString()} - ⚠️ Chưa có cấu hình nào để giả lập.\n`);
+            isSimulating = false; // Reset isSimulating khi không còn cấu hình
             return;
         }
 
-        // Chia configs thành từng nhóm 1 cấu hình để chạy song song
         const batchSize = 1;
         for (let i = 0; i < configs.length; i += batchSize) {
             const batch = configs.slice(i, i + batchSize);
             await Promise.all(batch.map(config => simulateConfig(config)));
         }
+
+        console.log('Hoàn tất một vòng giả lập. Đặt lại isSimulating và kiểm tra lại sau 30 giây...');
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Hoàn tất một vòng giả lập. Đặt lại isSimulating và kiểm tra lại sau 30 giây...\n`);
+        isSimulating = false; // Reset isSimulating để bot có thể chạy lại
+        setTimeout(() => simulateRealTimeForConfigs(stepInterval), 30000); // Chạy lại sau 30 giây
     } catch (error) {
         console.error(`Lỗi truy vấn watch_configs: ${error.message}`);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi truy vấn watch_configs: ${error.message}\n`);
+        isSimulating = false; // Reset isSimulating nếu có lỗi
+        setTimeout(() => simulateRealTimeForConfigs(stepInterval), 30000); // Thử lại sau 30 giây
     }
+}
+
+// Kiểm tra định kỳ các cấu hình mới
+function startSimulationChecker() {
+    const CHECK_INTERVAL = 5 * 60 * 1000; // Kiểm tra mỗi 5 phút
+    function checkAndSimulate() {
+        if (!isSimulating) {
+            console.log('Kiểm tra định kỳ: Chạy simulateRealTimeForConfigs...');
+            fs.appendFileSync('bot.log', `${new Date().toISOString()} - Kiểm tra định kỳ: Chạy simulateRealTimeForConfigs...\n`);
+            simulateRealTimeForConfigs(1000);
+        } else {
+            console.log('Kiểm tra định kỳ: Đang chạy giả lập, bỏ qua...');
+            fs.appendFileSync('bot.log', `${new Date().toISOString()} - Kiểm tra định kỳ: Đang chạy giả lập, bỏ qua...\n`);
+        }
+        setTimeout(checkAndSimulate, CHECK_INTERVAL);
+    }
+    setTimeout(checkAndSimulate, CHECK_INTERVAL);
 }
 
 // Kiểm tra tự động trong thời gian thực
@@ -673,6 +697,7 @@ async function startBot() {
 
         // Chạy giả lập và kiểm tra tự động
         await simulateRealTimeForConfigs(1000);
+        startSimulationChecker(); // Thêm kiểm tra định kỳ
         startAutoChecking();
         console.log('✅ Bot đang chạy với giả lập tối ưu và kiểm tra tự động...');
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Bot đang chạy với giả lập tối ưu và kiểm tra tự động...\n`);
