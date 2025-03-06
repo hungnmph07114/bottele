@@ -735,7 +735,7 @@ bot.onText(/\/trogiup/, (msg) => {
 
 // Kiểm tra tự động (mỗi 5 phút)
 function startAutoChecking() {
-    const CHECK_INTERVAL = 5 * 60 * 1000;
+    const CHECK_INTERVAL = 1 * 60 * 1000;
     setInterval(() => {
         for (const [chatId, watchList] of autoWatchList) {
             watchList.forEach(config => {
@@ -746,7 +746,7 @@ function startAutoChecking() {
 }
 
 // Hàm kiểm tra và gửi tín hiệu nếu đạt ngưỡng (confidence ≥ 80%)
-async function checkAutoSignal(chatId, { symbol, pair, timeframe }, confidenceThreshold = 80) {
+async function checkAutoSignal(chatId, { symbol, pair, timeframe }, confidenceThreshold = 40) {
     try {
         const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe);
         if (confidence >= confidenceThreshold) {
