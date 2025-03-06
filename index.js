@@ -357,16 +357,16 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
     }
 
     const details = [];
-    details.push(`📈 RSI: ${rsi.toFixed(1)}`);
-    details.push(`📊 MACD: ${macd.toFixed(4)} / ${signal.toFixed(4)}`);
-    details.push(`📉 ADX: ${adx.toFixed(1)}`);
+    // details.push(`📈 RSI: ${rsi.toFixed(1)}`);
+    // details.push(`📊 MACD: ${macd.toFixed(4)} / ${signal.toFixed(4)}`);
+    // details.push(`📉 ADX: ${adx.toFixed(1)}`);
+    // details.push(`📏 Bollinger: ${lowerBB.toFixed(4)} - ${upperBB.toFixed(4)}`);
     details.push(`📦 Volume: ${volumeSpike ? 'TĂNG ĐỘT BIẾN' : 'BÌNH THƯỜNG'}`);
-    details.push(`📏 Bollinger: ${lowerBB.toFixed(4)} - ${upperBB.toFixed(4)}`);
     details.push(`🛡️ Hỗ trợ: ${support.toFixed(4)}, Kháng cự: ${resistance.toFixed(4)}`);
     if (adx < 20 && (upperBB - lowerBB) < 0.8 * avgBBWidth) {
         details.push(`⚠️ Lưu ý: Thị trường đang đi ngang, tín hiệu có thể không chính xác`);
     }
-    const timestamp = new Date().toLocaleString();
+    const timestamp = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
     details.push(`⏰ Thời gian: ${timestamp}`);
     if (adx < 20 && (upperBB - lowerBB) < 0.8 * avgBBWidth) {
         details.push(`📊 Xu hướng: Đi ngang`);
@@ -392,8 +392,6 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
         }
     }
     details.push(`ℹ️ Độ tin cậy dựa trên sự kết hợp của các chỉ báo RSI, MACD, ADX và Bollinger Bands.`);
-
-
     if (signalText !== '⚪️ ĐỢI - Chưa có tín hiệu') {
         details.push(`✅ Độ tin cậy: ${confidence}%`);
         details.push(`🎯 Điểm vào: ${entry.toFixed(4)}`);
