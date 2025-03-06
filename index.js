@@ -286,7 +286,19 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
     const [upperBB, middleBB, lowerBB] = computeBollingerBands(df.map(d => d.close));
     const atr = computeATR(df);
     const { support, resistance } = computeSupportResistance(df);
-
+    // Thêm đoạn này để có bbWidth và avgBBWidth
+    const bbWidth = upperBB - lowerBB;
+    const avgBBWidth = computeMA(
+        df.map(d => {
+            const arr = BollingerBands.calculate({ values: df.map(v => v.close), period: 20, stdDev: 2 });
+            if (!arr || arr.length === 0) return 0;
+            const tmp = arr[arr.length - 1];
+            return tmp.upper - tmp.lower;
+        }),
+        20
+    );
+    // Sau đó, bạn có thể dùng bbWidth và avgBBWidth:
+    const isSideways = adx < 20 && (bbWidth < avgBBWidth * 0.8);
     const input = tf.tensor3d([windowFeatures]); // shape [1, WINDOW_SIZE, 6]
     const prediction = model.predict(input);
     const [longProb, shortProb, waitProb] = prediction.dataSync();
@@ -373,6 +385,9 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
         }
     }
     details.push(`ℹ️ Độ tin cậy dựa trên sự kết hợp của các chỉ báo RSI, MACD, ADX và Bollinger Bands.`);
+    if (isSideways) {
+        details.push(`⚠️ Lưu ý: Thị trường đang đi ngang, tín hiệu có thể không chính xác`);
+    }
     if (signalText !== '⚪️ ĐỢI - Chưa có tín hiệu') {
         details.push(`✅ Độ tin cậy: ${confidence}%`);
         details.push(`🎯 Điểm vào: ${entry.toFixed(4)}`);
@@ -468,7 +483,7 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
 // =====================
 let lastIndexMap = new Map();
 let lastSignalTimestamps = {}; // Cooldown cho tín hiệu
-const SIGNAL_COOLDOWN = 10 * 60 * 1000; // 10 phút
+const SIGNAL_COOLDOWN = 20 * 60 * 1000; // 20 phút
 
 async function simulateConfig(config, stepInterval) {
     const { chatId, symbol, pair, timeframe } = config;
