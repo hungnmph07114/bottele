@@ -337,28 +337,34 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
 
     return { result: resultText, confidence };
 }
-
 // =====================
-// SELF-EVALUATE & TRAIN
+// SELF-EVALUATE & TRAIN TRONG GIẢ LẬP (LSTM với WINDOW_SIZE)
 // =====================
 let enableSimulation = true;
 let recentAccuracies = [];
 let lastAccuracy = 0;
 let shouldStopTraining = false;
 let trainingCounter = 0;
-
 async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
-    if (shouldStopTraining || historicalSlice.length < WINDOW_SIZE) return;
+    if (shouldStopTraining) return;
+    if (historicalSlice.length < WINDOW_SIZE) return;
 
     const currentPrice = historicalSlice[historicalSlice.length - 1].close;
     const futureData = fullData.slice(currentIndex + 1, currentIndex + 11);
     if (futureData.length < 10) return;
 
     trainingCounter++;
+
     const memoryUsage = process.memoryUsage();
     const usedMemoryMB = memoryUsage.heapUsed / 1024 / 1024;
-    if (usedMemoryMB > 450 || trainingCounter % 10 !== 0) {
-        console.log(`Bỏ qua huấn luyện tại nến ${currentIndex} (RAM: ${usedMemoryMB.toFixed(2)} MB, Counter: ${trainingCounter})`);
+    if (usedMemoryMB > 450) {
+        console.log(`🚨 RAM cao: ${usedMemoryMB.toFixed(2)}MB - bỏ qua huấn luyện tại nến ${currentIndex}`);
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại nến ${currentIndex} do RAM cao: ${usedMemoryMB.toFixed(2)} MB (trainingCounter: ${trainingCounter})\n`);
+        return;
+    }
+    if (trainingCounter % 10 !== 0) {
+        console.log(`Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})`);
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})\n`);
         return;
     }
 
@@ -368,18 +374,35 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
     if (priceChange > 1) trueSignal = [1, 0, 0];
     else if (priceChange < -1) trueSignal = [0, 1, 0];
 
+    if (historicalSlice.length < WINDOW_SIZE) return;
     const windowFeatures = [];
     for (let i = historicalSlice.length - WINDOW_SIZE; i < historicalSlice.length; i++) {
         windowFeatures.push(computeFeature(historicalSlice, i));
     }
-    const xs = tf.tensor3d([windowFeatures]);
-    const ys = tf.tensor2d([trueSignal]);
+    const xs = tf.tensor3d([windowFeatures]); // shape [1, WINDOW_SIZE, 6]
+    const ys = tf.tensor2d([trueSignal]); // shape [1, 3]
     const history = await model.fit(xs, ys, { epochs: 1, batchSize: 1 });
     xs.dispose();
     ys.dispose();
-    console.log(`✅ Huấn luyện tại nến ${currentIndex} | Accuracy: ${(lastAccuracy * 100).toFixed(2)}%`);
-}
 
+    lastAccuracy = history.history.accuracy[0] || 0;
+    recentAccuracies.push(lastAccuracy);
+    if (recentAccuracies.length > 50) recentAccuracies.shift();
+
+    console.log(`✅ Huấn luyện tại nến ${currentIndex} | RAM: ${usedMemoryMB.toFixed(2)} MB | Accuracy: ${(lastAccuracy * 100).toFixed(2)}%`);
+    fs.appendFileSync('bot.log', `${new Date().toISOString()} - Huấn luyện tại nến ${currentIndex} | RAM: ${usedMemoryMB.toFixed(2)} MB | Accuracy: ${(lastAccuracy * 100).toFixed(2)}%\n`);
+
+    if (recentAccuracies.length >= 50) {
+        const avgAcc = recentAccuracies.reduce((sum, val) => sum + val, 0) / recentAccuracies.length;
+        const maxAcc = Math.max(...recentAccuracies);
+        const minAcc = Math.min(...recentAccuracies);
+        if (avgAcc > 0.85 && (maxAcc - minAcc) < 0.05) {
+            enableSimulation = false; // dừng giả lập
+
+            console.log('✅ Mô hình đã ổn định, dừng giả lập.');
+        }
+    }
+}
 // =====================
 // CHẾ ĐỘ GIẢ LẬP
 // =====================
