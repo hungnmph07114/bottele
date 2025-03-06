@@ -491,6 +491,7 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
         const minAcc = Math.min(...recentAccuracies);
         if (avgAcc > 0.85 && (maxAcc - minAcc) < 0.05) {
             enableSimulation = false; // dừng giả lập
+
             console.log('✅ Mô hình đã ổn định, dừng giả lập.');
         }
     }
@@ -566,7 +567,7 @@ async function simulateRealTimeForConfigs(stepInterval = 1000) {
 // =====================
 // HÀM FETCH DỮ LIỆU
 // =====================
-async function fetchKlines(symbol, pair, timeframe, limit = 1000) {
+async function fetchKlines(symbol, pair, timeframe, limit = 200) {
     try {
         const response = await axios.get(`${BINANCE_API}/klines`, {
             params: { symbol: `${symbol.toUpperCase()}${pair.toUpperCase()}`, interval: timeframe, limit },
@@ -791,7 +792,7 @@ setInterval(dynamicTrainingControl, 10 * 60 * 1000); // kiểm tra mỗi 10 phú
 // =====================
 // HÀM FETCH DỮ LIỆU
 // =====================
-async function fetchKlines(symbol, pair, timeframe, limit = 1000) {
+async function fetchKlines(symbol, pair, timeframe, limit = 200) {
     try {
         const response = await axios.get(`${BINANCE_API}/klines`, {
             params: { symbol: `${symbol.toUpperCase()}${pair.toUpperCase()}`, interval: timeframe, limit },
