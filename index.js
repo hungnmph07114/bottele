@@ -389,9 +389,6 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
             details.push(`⚖️ R:R: ${rr}:1`);
         }
     }
-
-    details.push(`ℹ️ Độ tin cậy dựa trên sự kết hợp của các chỉ báo RSI, MACD, ADX và Bollinger Bands.`);
-
     if (signalText !== '⚪️ ĐỢI - Chưa có tín hiệu') {
         details.push(`✅ Độ tin cậy: ${confidence}%`);
         details.push(`🎯 Điểm vào: ${entry.toFixed(4)}`);
@@ -506,6 +503,10 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
 
 let lastIndexMap = new Map();
 
+// Khai báo biến toàn cục cho cooldown tín hiệu
+let lastSignalTimestamps = {}; // Map lưu thời gian gửi tín hiệu cuối cùng cho mỗi configKey
+const SIGNAL_COOLDOWN = 10 * 60 * 1000; // 10 phút (tính bằng ms)
+
 async function simulateConfig(config, stepInterval) {
     const { chatId, symbol, pair, timeframe } = config;
     const configKey = `${chatId}_${symbol}_${pair}_${timeframe}`;
@@ -525,10 +526,21 @@ async function simulateConfig(config, stepInterval) {
         try {
             const historicalSlice = historicalData.slice(0, currentIndex + 1);
             const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe, {}, historicalSlice);
-            if (confidence >= 80) {
-                bot.sendMessage(chatId, `🚨 *TÍN HIỆU GIẢ LẬP ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]})* 🚨\n${result}`, { parse_mode: 'Markdown' });
+
+            const now = Date.now();
+            // Kiểm tra cooldown: chỉ gửi tín hiệu nếu độ tin cậy >= 80 và đã qua khoảng thời gian cooldown
+            if (confidence >= 40 &&
+                (!lastSignalTimestamps[configKey] || (now - lastSignalTimestamps[configKey] > SIGNAL_COOLDOWN))
+            ) {
+                bot.sendMessage(
+                    chatId,
+                    `🚨 *TÍN HIỆU GIẢ LẬP ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]})* 🚨\n${result}`,
+                    { parse_mode: 'Markdown' }
+                );
                 console.log(`✅ Gửi tín hiệu ${symbol}/${pair} cho chat ${chatId} (Độ tin: ${confidence}%)`);
+                lastSignalTimestamps[configKey] = now; // Cập nhật thời gian gửi tín hiệu
             }
+
             if (!shouldStopTraining) {
                 await selfEvaluateAndTrain(historicalSlice, currentIndex, historicalData);
             }
@@ -745,7 +757,7 @@ function startAutoChecking() {
     }, CHECK_INTERVAL);
 }
 
-// Hàm kiểm tra và gửi tín hiệu nếu đạt ngưỡng (confidence ≥ 80%)
+// Hàm kiểm tra và gửi tín hiệu nếu đạt ngưỡng (confidence ≥ 40%)
 async function checkAutoSignal(chatId, { symbol, pair, timeframe }, confidenceThreshold = 40) {
     try {
         const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe);
