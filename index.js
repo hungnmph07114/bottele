@@ -10,9 +10,6 @@ const TOKEN = '7605131321:AAGCW_FWEqBC7xMOt8RwL4nek4vqxPBVluY';
 const BINANCE_API = 'https://api.binance.com/api/v3';
 let bot;
 
-// Bật/tắt giả lập (ban đầu là true, sẽ tự động đặt thành false khi mô hình ổn định)
-let enableSimulation = true;
-
 // Timeframes (hỗ trợ cả 15m và m15, 1h và h1, v.v.)
 const timeframes = {
     '1m': '1 phút', 'm1': '1 phút',
@@ -183,7 +180,7 @@ async function fetchKlines(symbol, pair, timeframe, limit = 200) {
     }
 }
 
-// Lấy dữ liệu lịch sử cho giả lập
+// Lấy dữ liệu lịch sử cho giả lập (giảm số cây nến xuống 200)
 async function fetchHistoricalData(symbol, pair, timeframe, limit = 200) {
     return await fetchKlines(symbol, pair, timeframe, limit);
 }
@@ -329,30 +326,25 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {},
     return { result, confidence };
 }
 
-// Tự đánh giá và huấn luyện trong giả lập
-let trainingCounter = 0;
-let recentAccuracies = [];
-let lastAccuracy = 0;
-let shouldStopTraining = false;
-
+// Tự đánh giá và huấn luyện trong giả lập (giảm tần suất huấn luyện và kiểm tra RAM)
+let trainingCounter = 0; // Đếm số lần gọi để giảm tần suất huấn luyện
 async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
-    if (shouldStopTraining) return;
-
     const currentPrice = historicalSlice[historicalSlice.length - 1].close;
     const futureData = fullData.slice(currentIndex + 1, currentIndex + 11);
     if (futureData.length < 10) return;
 
     trainingCounter++;
 
+    // Kiểm tra RAM trước khi huấn luyện
     const memoryUsage = process.memoryUsage();
     const usedMemoryMB = memoryUsage.heapUsed / 1024 / 1024;
-    if (usedMemoryMB > 450) {
+    if (usedMemoryMB > 450) { // Nếu RAM vượt 450 MB (90% của 512 MB)
         console.log(`Bỏ qua huấn luyện tại cây nến ${currentIndex} do RAM cao: ${usedMemoryMB.toFixed(2)} MB (trainingCounter: ${trainingCounter})`);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại cây nến ${currentIndex} do RAM cao: ${usedMemoryMB.toFixed(2)} MB (trainingCounter: ${trainingCounter})\n`);
         return;
     }
 
-    if (trainingCounter % 10 !== 0) {
+    if (trainingCounter % 10 !== 0) { // Chỉ huấn luyện sau mỗi 10 cây nến
         console.log(`Bỏ qua huấn luyện tại cây nến ${currentIndex} (trainingCounter: ${trainingCounter})`);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại cây nến ${currentIndex} (trainingCounter: ${trainingCounter})\n`);
         return;
@@ -391,22 +383,17 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
     const input = [[[normalizedRsi, normalizedAdx, normalizedHistogram, volumeSpike, normalizedMaDiff, normalizedBbDiff, closeLag1, closeLag2, normalizedAtr, rsiRollingMean]]];
     const xs = tf.tensor3d(input);
     const ys = tf.tensor2d([trueSignal]);
-    const history = await model.fit(xs, ys, { epochs: 1, batchSize: 1 });
+    await model.fit(xs, ys, { epochs: 1, batchSize: 1 });
     xs.dispose();
     ys.dispose();
 
-    lastAccuracy = history.history.accuracy[0] || 0;
-    recentAccuracies.push(lastAccuracy);
-    if (recentAccuracies.length > 50) recentAccuracies.shift();
-
-    console.log(`✅ Đã huấn luyện mô hình tại cây nến ${currentIndex} với nhãn thực tế: ${trueSignal} (trainingCounter: ${trainingCounter}, RAM: ${usedMemoryMB.toFixed(2)} MB, Accuracy: ${(lastAccuracy * 100).toFixed(2)}%)`);
-    fs.appendFileSync('bot.log', `${new Date().toISOString()} - Đã huấn luyện mô hình tại cây nến ${currentIndex} với nhãn: ${trueSignal} (trainingCounter: ${trainingCounter}, RAM: ${usedMemoryMB.toFixed(2)} MB, Accuracy: ${(lastAccuracy * 100).toFixed(2)}%)\n`);
+    console.log(`✅ Đã huấn luyện mô hình tại cây nến ${currentIndex} với nhãn thực tế: ${trueSignal} (trainingCounter: ${trainingCounter}, RAM: ${usedMemoryMB.toFixed(2)} MB)`);
+    fs.appendFileSync('bot.log', `${new Date().toISOString()} - Đã huấn luyện mô hình tại cây nến ${currentIndex} với nhãn: ${trueSignal} (trainingCounter: ${trainingCounter}, RAM: ${usedMemoryMB.toFixed(2)} MB)\n`);
 }
 
 // Giả lập dựa trên watch_configs với retry logic
 let isSimulating = false;
-let lastIndexMap = new Map();
-
+let lastIndexMap = new Map(); // Lưu trữ vị trí cây nến cuối cùng của từng cấu hình
 async function simulateRealTimeForConfigs(stepInterval = 1000) {
     const getConfigs = () => new Promise((resolve, reject) => {
         db.all("SELECT chatId, symbol, pair, timeframe FROM watch_configs", [], (err, rows) => {
@@ -417,7 +404,7 @@ async function simulateRealTimeForConfigs(stepInterval = 1000) {
 
     const simulateConfig = async (config) => {
         const { chatId, symbol, pair, timeframe } = config;
-        const configKey = `${chatId}_${symbol}_${pair}_${timeframe}`;
+        const configKey = `${chatId}_${symbol}_${pair}_${timeframe}`; // Key để lưu vị trí cây nến
         const historicalData = await fetchHistoricalData(symbol, pair, timeframe);
         if (!historicalData) {
             console.error(`❌ Không thể lấy dữ liệu cho ${symbol}/${pair}`);
@@ -430,7 +417,7 @@ async function simulateRealTimeForConfigs(stepInterval = 1000) {
             if (currentIndex >= historicalData.length) {
                 console.log(`✅ Hoàn tất giả lập ${symbol}/${pair} (${timeframes[timeframe]})`);
                 fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Hoàn tất giả lập ${symbol}/${pair} (${timeframes[timeframe]})\n`);
-                lastIndexMap.delete(configKey);
+                lastIndexMap.delete(configKey); // Xóa vị trí sau khi hoàn tất
                 return;
             }
 
@@ -446,33 +433,14 @@ async function simulateRealTimeForConfigs(stepInterval = 1000) {
                     fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Đã gửi tín hiệu giả lập ${symbol}/${pair} đến chat ${chatId} - ${confidence}%\n`);
                 }
 
-                if (!shouldStopTraining) {
-                    await selfEvaluateAndTrain(historicalSlice, currentIndex, historicalData);
-                }
-
-                lastIndexMap.set(configKey, currentIndex + 1);
+                await selfEvaluateAndTrain(historicalSlice, currentIndex, historicalData);
+                lastIndexMap.set(configKey, currentIndex + 1); // Lưu vị trí cây nến hiện tại
                 currentIndex++;
-
-                // Kiểm tra độ chính xác để dừng huấn luyện và giả lập
-                if (recentAccuracies.length >= 50) {
-                    const avgAccuracy = recentAccuracies.reduce((a, b) => a + b, 0) / recentAccuracies.length;
-                    const maxAccuracy = Math.max(...recentAccuracies);
-                    const minAccuracy = Math.min(...recentAccuracies);
-                    if (avgAccuracy > 0.85 && maxAccuracy - minAccuracy < 0.05) {
-                        shouldStopTraining = true;
-                        enableSimulation = false; // Tự động dừng giả lập
-                        console.log('✅ Mô hình đã ổn định, dừng tự huấn luyện và giả lập.');
-                        fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Mô hình đã ổn định (Accuracy trung bình: ${(avgAccuracy * 100).toFixed(2)}%), dừng tự huấn luyện và giả lập.\n`);
-                    }
-                }
-
-                if (enableSimulation) {
-                    setTimeout(simulateStep, stepInterval);
-                }
+                setTimeout(simulateStep, stepInterval);
             } catch (error) {
                 console.error(`Lỗi trong giả lập ${symbol}/${pair} tại cây nến ${currentIndex}: ${error.message}`);
                 fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi trong giả lập ${symbol}/${pair} tại cây nến ${currentIndex}: ${error.message}\n`);
-                setTimeout(simulateStep, 30000);
+                setTimeout(simulateStep, 30000); // Thử lại sau 30 giây nếu có lỗi
             }
         };
 
@@ -482,57 +450,23 @@ async function simulateRealTimeForConfigs(stepInterval = 1000) {
     };
 
     try {
-        if (!enableSimulation) {
-            console.log('⚠️ Giả lập đã bị tắt, bỏ qua simulateRealTimeForConfigs.');
-            fs.appendFileSync('bot.log', `${new Date().toISOString()} - ⚠️ Giả lập đã bị tắt, bỏ qua simulateRealTimeForConfigs.\n`);
-            return;
-        }
-
         const configs = await getConfigs();
         if (configs.length === 0) {
             console.log('⚠️ Chưa có cấu hình nào để giả lập. Hãy dùng /tinhieu để thêm.');
             fs.appendFileSync('bot.log', `${new Date().toISOString()} - ⚠️ Chưa có cấu hình nào để giả lập.\n`);
-            isSimulating = false;
             return;
         }
 
+        // Chia configs thành từng nhóm 1 cấu hình để chạy song song
         const batchSize = 1;
         for (let i = 0; i < configs.length; i += batchSize) {
             const batch = configs.slice(i, i + batchSize);
             await Promise.all(batch.map(config => simulateConfig(config)));
         }
-
-        console.log('Hoàn tất một vòng giả lập. Đặt lại isSimulating và kiểm tra lại sau 30 giây...');
-        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Hoàn tất một vòng giả lập. Đặt lại isSimulating và kiểm tra lại sau 30 giây...\n`);
-        isSimulating = false;
-        if (enableSimulation) {
-            setTimeout(() => simulateRealTimeForConfigs(stepInterval), 30000);
-        }
     } catch (error) {
         console.error(`Lỗi truy vấn watch_configs: ${error.message}`);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi truy vấn watch_configs: ${error.message}\n`);
-        isSimulating = false;
-        if (enableSimulation) {
-            setTimeout(() => simulateRealTimeForConfigs(stepInterval), 30000);
-        }
     }
-}
-
-// Kiểm tra định kỳ các cấu hình mới
-function startSimulationChecker() {
-    const CHECK_INTERVAL = 5 * 60 * 1000;
-    function checkAndSimulate() {
-        if (!isSimulating && enableSimulation) {
-            console.log('Kiểm tra định kỳ: Chạy simulateRealTimeForConfigs...');
-            fs.appendFileSync('bot.log', `${new Date().toISOString()} - Kiểm tra định kỳ: Chạy simulateRealTimeForConfigs...\n`);
-            simulateRealTimeForConfigs(1000);
-        } else {
-            console.log('Kiểm tra định kỳ: Đang chạy giả lập hoặc giả lập bị tắt, bỏ qua...');
-            fs.appendFileSync('bot.log', `${new Date().toISOString()} - Kiểm tra định kỳ: Đang chạy giả lập hoặc giả lập bị tắt, bỏ qua...\n`);
-        }
-        setTimeout(checkAndSimulate, CHECK_INTERVAL);
-    }
-    setTimeout(checkAndSimulate, CHECK_INTERVAL);
 }
 
 // Kiểm tra tự động trong thời gian thực
@@ -579,6 +513,7 @@ async function startBot() {
     try {
         bot = new TelegramBot(TOKEN, { polling: true });
 
+        // Xử lý lỗi polling
         bot.on('polling_error', (error) => {
             if (error.code === 'ETELEGRAM' && error.message.includes('409 Conflict')) {
                 console.error('Lỗi 409: Nhiều instance bot đang chạy. Thử lại sau 30 giây...');
@@ -593,6 +528,7 @@ async function startBot() {
             }
         });
 
+        // Lệnh phân tích thủ công
         bot.onText(/\?(.+)/, async (msg, match) => {
             const parts = match[1].split(',');
             if (parts.length < 3) {
@@ -624,6 +560,7 @@ async function startBot() {
             bot.sendMessage(msg.chat.id, result, { parse_mode: 'Markdown' });
         });
 
+        // Lệnh theo dõi tự động
         bot.onText(/\/tinhieu (.+)/, async (msg, match) => {
             const parts = match[1].split(',');
             if (parts.length < 3) {
@@ -649,7 +586,7 @@ async function startBot() {
                 } else {
                     bot.sendMessage(chatId, `✅ Bắt đầu theo dõi tín hiệu ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframeInput]})`);
                     fs.appendFileSync('bot.log', `${new Date().toISOString()} - Thêm config ${symbol}/${pair} cho chat ${chatId} thành công.\n`);
-                    if (!isSimulating && enableSimulation) {
+                    if (!isSimulating) {
                         isSimulating = true;
                         simulateRealTimeForConfigs(1000);
                     }
@@ -657,6 +594,7 @@ async function startBot() {
             });
         });
 
+        // Lệnh dừng theo dõi
         bot.onText(/\/dungtinhieu (.+)/, (msg, match) => {
             const parts = match[1].split(',');
             if (parts.length < 3) {
@@ -681,6 +619,7 @@ async function startBot() {
             });
         });
 
+        // Lệnh trợ giúp
         bot.onText(/\/trogiup/, (msg) => {
             const helpMessage = `
 📚 *HƯỚNG DẪN SỬ DỤNG BOT GIAO DỊCH*
@@ -733,18 +672,16 @@ async function startBot() {
         await startBot();
 
         // Chạy giả lập và kiểm tra tự động
-        if (enableSimulation) {
-            await simulateRealTimeForConfigs(1000);
-            startSimulationChecker();
-        }
+        await simulateRealTimeForConfigs(1000);
         startAutoChecking();
-        console.log(`✅ Bot đang chạy với kiểm tra tự động${enableSimulation ? ' và giả lập tối ưu' : ''}...`);
-        fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Bot đang chạy với kiểm tra tự động${enableSimulation ? ' và giả lập tối ưu' : ''}...\n`);
+        console.log('✅ Bot đang chạy với giả lập tối ưu và kiểm tra tự động...');
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Bot đang chạy với giả lập tối ưu và kiểm tra tự động...\n`);
     } catch (error) {
         console.error("Lỗi khởi tạo:", error);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi khởi tạo: ${error.message}\n`);
     }
 
+    // Đóng database khi tắt bot
     process.on('SIGINT', () => {
         insertStmt.finalize();
         deleteStmt.finalize();
