@@ -517,35 +517,30 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
         return;
     }
     if (historicalSlice.length < currentConfig.windowSize) {
-        console.log(`🚫 Độ dài dữ liệu (${historicalSlice.length}) nhỏ hơn WINDOW_SIZE (${currentConfig.windowSize}), bỏ qua huấn luyện tại nến ${currentIndex}`);
-        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại nến ${currentIndex} do dữ liệu không đủ\n`);
+        console.log(`🚫 Dữ liệu quá ít (${historicalSlice.length} < ${currentConfig.windowSize}), bỏ qua huấn luyện tại nến ${currentIndex}`);
         return;
     }
 
     const currentPrice = historicalSlice[historicalSlice.length - 1].close;
     const futureData = fullData.slice(currentIndex + 1, currentIndex + 11);
     if (!futureData || futureData.length < 10) {
-        console.log(`🚫 Dữ liệu tương lai không đủ (${futureData ? futureData.length : 0} < 10), bỏ qua huấn luyện tại nến ${currentIndex}`);
-        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại nến ${currentIndex} do dữ liệu tương lai không đủ\n`);
+        console.log(`🚫 Dữ liệu tương lai không đủ, bỏ qua huấn luyện tại nến ${currentIndex}`);
         return;
     }
 
     trainingCounter++;
+    const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024;
 
-    const memoryUsage = process.memoryUsage();
-    const usedMemoryMB = memoryUsage.heapUsed / 1024 / 1024;
-    if (usedMemoryMB > 450) {
-        console.log(`🚨 RAM cao: ${usedMemoryMB.toFixed(2)}MB - bỏ qua huấn luyện tại nến ${currentIndex}`);
-        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại nến ${currentIndex} do RAM cao: ${usedMemoryMB.toFixed(2)} MB (trainingCounter: ${trainingCounter})\n`);
+    if (memoryUsage > 450) {
+        console.log(`🚨 RAM cao: ${memoryUsage.toFixed(2)}MB - bỏ qua huấn luyện`);
         return;
     }
 
-    // Giảm tần suất huấn luyện xuống 1/2 thay vì 1/5
-    // if (trainingCounter % 10 !== 0) {
-    //      console.log(`Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})`);
-    //     fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})\n`);
-    //     return;
-    // }
+    // Giảm tần suất huấn luyện để tránh overfitting
+    if (trainingCounter % 10 !== 0) {
+        console.log(`⏩ Bỏ qua huấn luyện tại nến ${currentIndex}`);
+        return;
+    }
 
     const futurePrice = futureData[futureData.length - 1].close;
     const priceChange = (futurePrice - currentPrice) / currentPrice * 100;
@@ -561,37 +556,40 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
     try {
         const xs = tf.tensor3d([windowFeatures]); // shape [1, WINDOW_SIZE, 11]
         const ys = tf.tensor2d([trueSignal]); // shape [1, 3]
-        const history = await model.fit(xs, ys, { epochs: 1, batchSize: 1 });
+
+        // Nếu RAM cao, giảm batchSize xuống 1
+        const batchSize = memoryUsage > 400 ? 1 : 4;
+
+        const history = await model.fit(xs, ys, { epochs: 1, batchSize: batchSize });
         xs.dispose();
         ys.dispose();
+        history.dispose?.();
 
-        // lastAccuracy = history.history.accuracy[0] || 0;
-        // recentAccuracies.push(lastAccuracy);
-        // if (recentAccuracies.length > 50) recentAccuracies.shift();
+        lastAccuracy = history.history.loss[0] || 0;
+        recentAccuracies.push(lastAccuracy);
+        if (recentAccuracies.length > 50) recentAccuracies.shift();
 
-        console.log(`historicalSlice.length: ${historicalSlice.length}, futureData.length: ${futureData.length}, currentIndex: ${currentIndex}`);
-        fs.appendFileSync('bot.log', `${new Date().toISOString()} - historicalSlice.length: ${historicalSlice.length}, futureData.length: ${futureData.length}, currentIndex: ${currentIndex}\n`);
-
-        console.log(`✅ Huấn luyện tại nến ${currentIndex} | RAM: ${usedMemoryMB.toFixed(2)} MB | Accuracy: ${(lastAccuracy * 100).toFixed(2)}%`);
-        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Huấn luyện tại nến ${currentIndex} | RAM: ${usedMemoryMB.toFixed(2)} MB | Accuracy: ${(lastAccuracy * 100).toFixed(2)}%\n`);
+        console.log(`✅ Huấn luyện tại nến ${currentIndex} | RAM: ${memoryUsage.toFixed(2)} MB | Loss: ${(lastAccuracy).toFixed(4)}`);
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Huấn luyện tại nến ${currentIndex} | RAM: ${memoryUsage.toFixed(2)} MB | Loss: ${(lastAccuracy).toFixed(4)}\n`);
 
         if (recentAccuracies.length >= 50) {
             const avgAcc = recentAccuracies.reduce((sum, val) => sum + val, 0) / recentAccuracies.length;
             const maxAcc = Math.max(...recentAccuracies);
             const minAcc = Math.min(...recentAccuracies);
-            if (avgAcc > 0.85 && (maxAcc - minAcc) < 0.05) {
+            if (avgAcc < 0.05 && (maxAcc - minAcc) < 0.02) {
                 enableSimulation = false;
                 if (adminChatId) {
-                    bot.sendMessage(adminChatId, `✅ *Mô hình đã ổn định* | Độ chính xác trung bình: ${(avgAcc * 100).toFixed(2)}% | Đã dừng giả lập.`, { parse_mode: 'Markdown' });
+                    bot.sendMessage(adminChatId, `✅ *Mô hình đã ổn định* | Loss trung bình: ${(avgAcc).toFixed(4)} | Đã dừng giả lập.`, { parse_mode: 'Markdown' });
                 }
                 console.log('✅ Mô hình đã ổn định, dừng giả lập.');
             }
         }
     } catch (error) {
-        console.error(`Lỗi huấn luyện tại nến ${currentIndex}: ${error.message}`);
+        console.error(`❌ Lỗi huấn luyện tại nến ${currentIndex}: ${error.message}`);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi huấn luyện tại nến ${currentIndex}: ${error.message}\n`);
     }
 }
+
 
 // Thông báo hiệu suất mô hình
 function reportModelPerformance() {
