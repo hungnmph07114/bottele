@@ -541,11 +541,11 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
     }
 
     // Giảm tần suất huấn luyện xuống 1/2 thay vì 1/5
-    if (trainingCounter % 10 !== 0) {
-         console.log(`Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})`);
-        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})\n`);
-        return;
-    }
+    // if (trainingCounter % 10 !== 0) {
+    //      console.log(`Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})`);
+    //     fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})\n`);
+    //     return;
+    // }
 
     const futurePrice = futureData[futureData.length - 1].close;
     const priceChange = (futurePrice - currentPrice) / currentPrice * 100;
