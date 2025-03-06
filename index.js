@@ -541,8 +541,8 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
     }
 
     // Giảm tần suất huấn luyện xuống 1/2 thay vì 1/5
-    if (trainingCounter % 2 !== 0) {
-        console.log(`Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})`);
+    if (trainingCounter % 10 !== 0) {
+         console.log(`Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})`);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})\n`);
         return;
     }
@@ -565,9 +565,9 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
         xs.dispose();
         ys.dispose();
 
-        lastAccuracy = history.history.accuracy[0] || 0;
-        recentAccuracies.push(lastAccuracy);
-        if (recentAccuracies.length > 50) recentAccuracies.shift();
+        // lastAccuracy = history.history.accuracy[0] || 0;
+        // recentAccuracies.push(lastAccuracy);
+        // if (recentAccuracies.length > 50) recentAccuracies.shift();
 
         console.log(`historicalSlice.length: ${historicalSlice.length}, futureData.length: ${futureData.length}, currentIndex: ${currentIndex}`);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - historicalSlice.length: ${historicalSlice.length}, futureData.length: ${futureData.length}, currentIndex: ${currentIndex}\n`);
