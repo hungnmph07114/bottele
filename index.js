@@ -172,6 +172,27 @@ async function initializeModel() {
     model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy', metrics: ['accuracy'] });
     console.log('✅ LSTM model đã được khởi tạo.');
 }
+// Dynamic Training Control: kiểm tra hiệu suất huấn luyện định kỳ và bật/tắt chế độ tự học
+function dynamicTrainingControl() {
+    // Chỉ kiểm tra khi có đủ dữ liệu về accuracy (ví dụ 50 lần huấn luyện)
+    if (recentAccuracies.length < 50) return;
+
+    const avgAcc = recentAccuracies.reduce((sum, acc) => sum + acc, 0) / recentAccuracies.length;
+    const maxAcc = Math.max(...recentAccuracies);
+    const minAcc = Math.min(...recentAccuracies);
+
+    // Nếu trung bình accuracy trên 85% và dao động nhỏ (< 0.05), tạm dừng huấn luyện
+    if (avgAcc > 0.85 && (maxAcc - minAcc) < 0.05) {
+        shouldStopTraining = true;
+        console.log("Dynamic Training Control: Mô hình ổn định, dừng huấn luyện tự động.");
+    } else {
+        shouldStopTraining = false;
+        console.log("Dynamic Training Control: Hiệu suất chưa ổn định, tiếp tục huấn luyện.");
+    }
+}
+
+// Thiết lập dynamic training control chạy mỗi 10 phút
+setInterval(dynamicTrainingControl, 10 * 60 * 1000);
 
 async function trainModelData(data) {
     try {
@@ -483,7 +504,7 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
 // =====================
 let lastIndexMap = new Map();
 let lastSignalTimestamps = {}; // Cooldown cho tín hiệu
-const SIGNAL_COOLDOWN = 20 * 60 * 1000; // 20 phút
+const SIGNAL_COOLDOWN = 10 * 60 * 1000; // 20 phút
 
 async function simulateConfig(config, stepInterval) {
     const { chatId, symbol, pair, timeframe } = config;
@@ -511,7 +532,7 @@ async function simulateConfig(config, stepInterval) {
             }
             const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe, {}, historicalSlice);
             const now = Date.now();
-            if (confidence >= 40 && (!lastSignalTimestamps[configKey] || (now - lastSignalTimestamps[configKey] > SIGNAL_COOLDOWN))) {
+            if (confidence >= 75 && (!lastSignalTimestamps[configKey] || (now - lastSignalTimestamps[configKey] > SIGNAL_COOLDOWN))) {
                 bot.sendMessage(chatId, `🚨 *TÍN HIỆU GIẢ LẬP ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]})* 🚨\n${result}`, { parse_mode: 'Markdown' });
                 console.log(`✅ Gửi tín hiệu ${symbol}/${pair} cho chat ${chatId} (Độ tin: ${confidence}%)`);
                 lastSignalTimestamps[configKey] = now;
@@ -724,7 +745,7 @@ function startAutoChecking() {
     }, CHECK_INTERVAL);
 }
 
-async function checkAutoSignal(chatId, { symbol, pair, timeframe }, confidenceThreshold = 40) {
+async function checkAutoSignal(chatId, { symbol, pair, timeframe }, confidenceThreshold = 75) {
     try {
         const { result, confidence } = await getCryptoAnalysis(symbol, pair, timeframe);
         if (confidence >= confidenceThreshold) {
