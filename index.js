@@ -1,5 +1,6 @@
 /********************************************
- *  BOT PHÂN TÍCH CRYPTO VỚI TÍNH NĂNG LƯU TRỮ SQL VÀ GIẢ LẬP (Sử dụng LSTM với WINDOW_SIZE)
+ *  BOT PHÂN TÍCH CRYPTO VỚI TÍNH NĂNG LƯU TRỮ SQL VÀ GIẢ LẬP
+ *  (Sử dụng LSTM với WINDOW_SIZE, dynamic training control và lời khuyên đòn bẩy)
  ********************************************/
 
 const TelegramBot = require('node-telegram-bot-api');
@@ -135,7 +136,7 @@ function loadWatchConfigs() {
 // =====================
 const WINDOW_SIZE = 10; // Số nến liên tiếp làm đầu vào
 
-// Hàm tính đặc trưng cho nến tại index j, sử dụng dữ liệu từ 0 đến j (có thể thay đổi nếu cần)
+// Hàm tính đặc trưng cho nến tại index j, sử dụng dữ liệu từ 0 đến j
 function computeFeature(data, j) {
     const subData = data.slice(0, j + 1);
     const close = subData.map(d => d.close);
@@ -172,27 +173,6 @@ async function initializeModel() {
     model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy', metrics: ['accuracy'] });
     console.log('✅ LSTM model đã được khởi tạo.');
 }
-// Dynamic Training Control: kiểm tra hiệu suất huấn luyện định kỳ và bật/tắt chế độ tự học
-function dynamicTrainingControl() {
-    // Chỉ kiểm tra khi có đủ dữ liệu về accuracy (ví dụ 50 lần huấn luyện)
-    if (recentAccuracies.length < 50) return;
-
-    const avgAcc = recentAccuracies.reduce((sum, acc) => sum + acc, 0) / recentAccuracies.length;
-    const maxAcc = Math.max(...recentAccuracies);
-    const minAcc = Math.min(...recentAccuracies);
-
-    // Nếu trung bình accuracy trên 85% và dao động nhỏ (< 0.05), tạm dừng huấn luyện
-    if (avgAcc > 0.85 && (maxAcc - minAcc) < 0.05) {
-        shouldStopTraining = true;
-        console.log("Dynamic Training Control: Mô hình ổn định, dừng huấn luyện tự động.");
-    } else {
-        shouldStopTraining = false;
-        console.log("Dynamic Training Control: Hiệu suất chưa ổn định, tiếp tục huấn luyện.");
-    }
-}
-
-// Thiết lập dynamic training control chạy mỗi 10 phút
-setInterval(dynamicTrainingControl, 10 * 60 * 1000);
 
 async function trainModelData(data) {
     try {
@@ -239,22 +219,26 @@ function computeRSI(close, period = 14) {
     if (!result || result.length === 0) return 50;
     return result[result.length - 1];
 }
+
 function computeMA(close, period = 20) {
     const ma = SMA.calculate({ values: close, period });
-    return ma && ma.length > 0 ? ma[ma.length - 1] : 0;
+    return (ma && ma.length > 0) ? ma[ma.length - 1] : 0;
 }
+
 function computeMACD(close) {
     const result = MACD.calculate({ values: close, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9 });
     if (!result || result.length === 0) return [0, 0, 0];
     const last = result[result.length - 1];
     return [last?.MACD || 0, last?.signal || 0, last?.histogram || 0];
 }
+
 function computeBollingerBands(close, period = 20, stdDev = 2) {
     const result = BollingerBands.calculate({ values: close, period, stdDev });
     if (!result || result.length === 0) return [0, 0, 0];
     const last = result[result.length - 1];
     return [last?.upper || 0, last?.middle || 0, last?.lower || 0];
 }
+
 function computeADX(data, period = 14) {
     const result = ADX.calculate({
         high: data.map(d => d.high),
@@ -265,6 +249,7 @@ function computeADX(data, period = 14) {
     if (!result || result.length === 0) return 0;
     return result[result.length - 1]?.adx || 0;
 }
+
 function computeATR(data, period = 14) {
     const result = ATR.calculate({
         high: data.map(d => d.high),
@@ -275,6 +260,7 @@ function computeATR(data, period = 14) {
     if (!result || result.length === 0) return 0;
     return result[result.length - 1] || 0;
 }
+
 function computeSupportResistance(data) {
     const highs = data.map(d => d.high);
     const lows = data.map(d => d.low);
@@ -282,7 +268,7 @@ function computeSupportResistance(data) {
 }
 
 // =====================
-// PHÂN TÍCH CRYPTO (Online)
+// PHÂN TÍCH CRYPTO (Online) với LSTM (WINDOW_SIZE)
 // =====================
 async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {}) {
     const df = await fetchKlines(symbol, pair, timeframe);
@@ -295,31 +281,31 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
     }
 
     const currentPrice = df[df.length - 1].close;
-    const ma10 = computeMA(df.map(d => d.close), 10);
-    const ma50 = computeMA(df.map(d => d.close), 10); // Lưu ý: có thể cần tính lại nếu cần
+    const closePrices = df.map(d => d.close);
     const volume = df.map(d => d.volume);
     const volumeMA = computeMA(volume, 20);
     const volumeSpike = volume[volume.length - 1] > volumeMA * 1.5 ? 1 : 0;
-    // Các chỉ báo khác được tính cho nến cuối cùng
-    const rsi = computeRSI(df.map(d => d.close));
+    const rsi = computeRSI(closePrices);
     const adx = computeADX(df);
-    const [macd, signal, histogram] = computeMACD(df.map(d => d.close));
-    const [upperBB, middleBB, lowerBB] = computeBollingerBands(df.map(d => d.close));
+    const [macd, signal, histogram] = computeMACD(closePrices);
+    const [upperBB, middleBB, lowerBB] = computeBollingerBands(closePrices);
     const atr = computeATR(df);
     const { support, resistance } = computeSupportResistance(df);
-    // Thêm đoạn này để có bbWidth và avgBBWidth
+
+    // Tính bề rộng Bollinger hiện tại và trung bình bề rộng trong 20 phiên
     const bbWidth = upperBB - lowerBB;
     const avgBBWidth = computeMA(
         df.map(d => {
             const arr = BollingerBands.calculate({ values: df.map(v => v.close), period: 20, stdDev: 2 });
             if (!arr || arr.length === 0) return 0;
             const tmp = arr[arr.length - 1];
-            return tmp.upper - tmp.lower;
+            return (tmp.upper - tmp.lower) || 0;
         }),
         20
     );
-    // Sau đó, bạn có thể dùng bbWidth và avgBBWidth:
-    const isSideways = adx < 20 && (bbWidth < avgBBWidth * 0.8);
+
+
+    // Tạo tensor đầu vào cho LSTM
     const input = tf.tensor3d([windowFeatures]); // shape [1, WINDOW_SIZE, 6]
     const prediction = model.predict(input);
     const [longProb, shortProb, waitProb] = prediction.dataSync();
@@ -336,16 +322,16 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
     const rsiOverbought = customThresholds.rsiOverbought || 70;
     const adxStrongTrend = customThresholds.adxStrongTrend || 30;
     if (adx > adxStrongTrend) {
-        if (rsi < rsiOversold && ma10 > ma50 && histogram > 0 && volumeSpike && currentPrice < middleBB) {
+        if (rsi < rsiOversold && ma10(df) > ma50(df) && histogram > 0 && volumeSpike && currentPrice < middleBB) {
             ruleBasedSignal = '🟢 LONG - Mua mạnh';
             ruleConfidence = 90;
-        } else if (rsi > rsiOverbought && ma10 < ma50 && histogram < 0 && volumeSpike && currentPrice > middleBB) {
+        } else if (rsi > rsiOverbought && ma10(df) < ma50(df) && histogram < 0 && volumeSpike && currentPrice > middleBB) {
             ruleBasedSignal = '🔴 SHORT - Bán mạnh';
             ruleConfidence = 90;
-        } else if (rsi < rsiOversold && ma10 > ma50 && histogram > 0) {
+        } else if (rsi < rsiOversold && ma10(df) > ma50(df) && histogram > 0) {
             ruleBasedSignal = '🟢 LONG - Mua (chưa xác nhận volume)';
             ruleConfidence = 60;
-        } else if (rsi > rsiOverbought && ma10 < ma50 && histogram < 0) {
+        } else if (rsi > rsiOverbought && ma10(df) < ma50(df) && histogram < 0) {
             ruleBasedSignal = '🔴 SHORT - Bán (chưa xác nhận volume)';
             ruleConfidence = 60;
         }
@@ -406,9 +392,8 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
         }
     }
     details.push(`ℹ️ Độ tin cậy dựa trên sự kết hợp của các chỉ báo RSI, MACD, ADX và Bollinger Bands.`);
-    if (isSideways) {
-        details.push(`⚠️ Lưu ý: Thị trường đang đi ngang, tín hiệu có thể không chính xác`);
-    }
+
+
     if (signalText !== '⚪️ ĐỢI - Chưa có tín hiệu') {
         details.push(`✅ Độ tin cậy: ${confidence}%`);
         details.push(`🎯 Điểm vào: ${entry.toFixed(4)}`);
@@ -419,6 +404,22 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
             details.push(`🛑 SL: ${sl.toFixed(4)}`);
             details.push(`💰 TP: ${tp.toFixed(4)}`);
         }
+        // Lời khuyên về đòn bẩy với nhiều mức (theo khả năng của Binance)
+        let leverageAdvice = '';
+        if (confidence >= 95) {
+            leverageAdvice = 'Khuyến nghị đòn bẩy: x125';
+        } else if (confidence >= 93) {
+            leverageAdvice = 'Khuyến nghị đòn bẩy: x100';
+        } else if (confidence >= 90) {
+            leverageAdvice = 'Khuyến nghị đòn bẩy: x50';
+        } else if (confidence >= 85) {
+            leverageAdvice = 'Khuyến nghị đòn bẩy: x20';
+        } else if (confidence >= 80) {
+            leverageAdvice = 'Khuyến nghị đòn bẩy: x10';
+        } else {
+            leverageAdvice = 'Khuyến nghị đòn bẩy: x5';
+        }
+        details.push(`💡 ${leverageAdvice}`);
     }
 
     const resultText = `📊 *Phân tích ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]})*\n`
@@ -430,7 +431,7 @@ async function getCryptoAnalysis(symbol, pair, timeframe, customThresholds = {})
 }
 
 // =====================
-// SELF-EVALUATE & TRAIN TRONG GIẢ LẬP (Sử dụng LSTM với WINDOW_SIZE)
+// SELF-EVALUATE & TRAIN TRONG GIẢ LẬP (LSTM với WINDOW_SIZE)
 // =====================
 let enableSimulation = true;
 let recentAccuracies = [];
@@ -439,8 +440,6 @@ let shouldStopTraining = false;
 let trainingCounter = 0;
 async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
     if (shouldStopTraining) return;
-
-    // Nếu chưa đủ WINDOW_SIZE, bỏ qua
     if (historicalSlice.length < WINDOW_SIZE) return;
 
     const currentPrice = historicalSlice[historicalSlice.length - 1].close;
@@ -468,14 +467,13 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
     if (priceChange > 1) trueSignal = [1, 0, 0];
     else if (priceChange < -1) trueSignal = [0, 1, 0];
 
-    // Tạo window features từ historicalSlice (sử dụng WINDOW_SIZE nến cuối cùng)
     if (historicalSlice.length < WINDOW_SIZE) return;
     const windowFeatures = [];
     for (let i = historicalSlice.length - WINDOW_SIZE; i < historicalSlice.length; i++) {
         windowFeatures.push(computeFeature(historicalSlice, i));
     }
     const xs = tf.tensor3d([windowFeatures]); // shape [1, WINDOW_SIZE, 6]
-    const ys = tf.tensor2d([trueSignal]); // shape [1,3]
+    const ys = tf.tensor2d([trueSignal]); // shape [1, 3]
     const history = await model.fit(xs, ys, { epochs: 1, batchSize: 1 });
     xs.dispose();
     ys.dispose();
@@ -492,9 +490,8 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
         const maxAcc = Math.max(...recentAccuracies);
         const minAcc = Math.min(...recentAccuracies);
         if (avgAcc > 0.85 && (maxAcc - minAcc) < 0.05) {
-            shouldStopTraining = true;
-            enableSimulation = false;
-            console.log('✅ Mô hình đã ổn định, dừng tự huấn luyện và giả lập.');
+            enableSimulation = false; // dừng giả lập
+            console.log('✅ Mô hình đã ổn định, dừng giả lập.');
         }
     }
 }
@@ -504,7 +501,7 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
 // =====================
 let lastIndexMap = new Map();
 let lastSignalTimestamps = {}; // Cooldown cho tín hiệu
-const SIGNAL_COOLDOWN = 10 * 60 * 1000; // 20 phút
+const SIGNAL_COOLDOWN = 10 * 60 * 1000; // 10 phút
 
 async function simulateConfig(config, stepInterval) {
     const { chatId, symbol, pair, timeframe } = config;
@@ -523,7 +520,6 @@ async function simulateConfig(config, stepInterval) {
             return;
         }
         try {
-            // Lấy window dữ liệu từ currentIndex - WINDOW_SIZE đến currentIndex - 1
             const historicalSlice = historicalData.slice(0, currentIndex);
             if (historicalSlice.length < WINDOW_SIZE) {
                 currentIndex++;
@@ -570,7 +566,7 @@ async function simulateRealTimeForConfigs(stepInterval = 1000) {
 // =====================
 // HÀM FETCH DỮ LIỆU
 // =====================
-async function fetchKlines(symbol, pair, timeframe, limit = 200) {
+async function fetchKlines(symbol, pair, timeframe, limit = 1000) {
     try {
         const response = await axios.get(`${BINANCE_API}/klines`, {
             params: { symbol: `${symbol.toUpperCase()}${pair.toUpperCase()}`, interval: timeframe, limit },
@@ -757,9 +753,28 @@ async function checkAutoSignal(chatId, { symbol, pair, timeframe }, confidenceTh
     }
 }
 
-// ------------------------------
+// =====================
+// DYNAMIC TRAINING CONTROL
+// =====================
+function dynamicTrainingControl() {
+    if (recentAccuracies.length < 50) return;
+    const avgAcc = recentAccuracies.reduce((sum, val) => sum + val, 0) / recentAccuracies.length;
+    const maxAcc = Math.max(...recentAccuracies);
+    const minAcc = Math.min(...recentAccuracies);
+    if (avgAcc > 0.85 && (maxAcc - minAcc) < 0.05) {
+        // Dừng giả lập (nếu bạn chỉ muốn dừng simulation khi mô hình ổn định)
+        enableSimulation = false;
+        console.log("Dynamic Training Control: Mô hình ổn định, dừng giả lập.");
+    } else {
+        enableSimulation = true;
+        console.log("Dynamic Training Control: Hiệu suất chưa ổn định, tiếp tục giả lập.");
+    }
+}
+setInterval(dynamicTrainingControl, 10 * 60 * 1000); // kiểm tra mỗi 10 phút
+
+// =====================
 // KHỞI ĐỘNG BOT VÀ CHƯƠNG TRÌNH CHÍNH
-// ------------------------------
+// =====================
 (async () => {
     await initializeModel();
     const initialData = await fetchKlines('BTC', 'USDT', '1h', 200);
@@ -773,7 +788,10 @@ async function checkAutoSignal(chatId, { symbol, pair, timeframe }, confidenceTh
     simulateRealTimeForConfigs(1000);
 })();
 
-async function fetchKlines(symbol, pair, timeframe, limit = 200) {
+// =====================
+// HÀM FETCH DỮ LIỆU
+// =====================
+async function fetchKlines(symbol, pair, timeframe, limit = 1000) {
     try {
         const response = await axios.get(`${BINANCE_API}/klines`, {
             params: { symbol: `${symbol.toUpperCase()}${pair.toUpperCase()}`, interval: timeframe, limit },
