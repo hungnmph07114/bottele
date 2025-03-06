@@ -540,7 +540,8 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
         return;
     }
 
-    if (trainingCounter % 5 !== 0) {
+    // Giảm tần suất huấn luyện xuống 1/2 thay vì 1/5
+    if (trainingCounter % 2 !== 0) {
         console.log(`Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})`);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Bỏ qua huấn luyện tại nến ${currentIndex} (trainingCounter: ${trainingCounter})\n`);
         return;
@@ -548,9 +549,9 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
 
     const futurePrice = futureData[futureData.length - 1].close;
     const priceChange = (futurePrice - currentPrice) / currentPrice * 100;
-    let trueSignal = [0, 0, 1];
-    if (priceChange > 1) trueSignal = [1, 0, 0];
-    else if (priceChange < -1) trueSignal = [0, 1, 0];
+    let trueSignal = [0, 0, 1]; // WAIT
+    if (priceChange > 0.5) trueSignal = [1, 0, 0]; // LONG
+    else if (priceChange < -0.5) trueSignal = [0, 1, 0]; // SHORT
 
     const windowFeatures = [];
     for (let i = historicalSlice.length - currentConfig.windowSize; i < historicalSlice.length; i++) {
@@ -558,8 +559,8 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
     }
 
     try {
-        const xs = tf.tensor3d([windowFeatures]);
-        const ys = tf.tensor2d([trueSignal]);
+        const xs = tf.tensor3d([windowFeatures]); // shape [1, WINDOW_SIZE, 11]
+        const ys = tf.tensor2d([trueSignal]); // shape [1, 3]
         const history = await model.fit(xs, ys, { epochs: 1, batchSize: 1 });
         xs.dispose();
         ys.dispose();
@@ -567,6 +568,9 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
         lastAccuracy = history.history.accuracy[0] || 0;
         recentAccuracies.push(lastAccuracy);
         if (recentAccuracies.length > 50) recentAccuracies.shift();
+
+        console.log(`historicalSlice.length: ${historicalSlice.length}, futureData.length: ${futureData.length}, currentIndex: ${currentIndex}`);
+        fs.appendFileSync('bot.log', `${new Date().toISOString()} - historicalSlice.length: ${historicalSlice.length}, futureData.length: ${futureData.length}, currentIndex: ${currentIndex}\n`);
 
         console.log(`✅ Huấn luyện tại nến ${currentIndex} | RAM: ${usedMemoryMB.toFixed(2)} MB | Accuracy: ${(lastAccuracy * 100).toFixed(2)}%`);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Huấn luyện tại nến ${currentIndex} | RAM: ${usedMemoryMB.toFixed(2)} MB | Accuracy: ${(lastAccuracy * 100).toFixed(2)}%\n`);
