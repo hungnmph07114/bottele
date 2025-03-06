@@ -537,10 +537,10 @@ async function selfEvaluateAndTrain(historicalSlice, currentIndex, fullData) {
     }
 
     // Giảm tần suất huấn luyện để tránh overfitting
-    if (trainingCounter % 10 !== 0) {
-        console.log(`⏩ Bỏ qua huấn luyện tại nến ${currentIndex}`);
-        return;
-    }
+    // if (trainingCounter % 10 !== 0) {
+    //     console.log(`⏩ Bỏ qua huấn luyện tại nến ${currentIndex}`);
+    //     return;
+    // }
 
     const futurePrice = futureData[futureData.length - 1].close;
     const priceChange = (futurePrice - currentPrice) / currentPrice * 100;
