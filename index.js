@@ -460,166 +460,144 @@ function computeFeature(data, j) {
 // =====================
 // PHÂN TÍCH CRYPTO (ĐÃ TỐI ƯU)
 // =====================
+
 async function getCryptoAnalysis(symbol, pair, timeframe, chatId, customThresholds = {}) {
-    // Mặc định ngưỡng tùy chỉnh
-    const thresholds = {
-        rsiOverbought: customThresholds.rsiOverbought || 70,
-        rsiOversold: customThresholds.rsiOversold || 30,
-        adxTrend: customThresholds.adxTrend || 20,
-        minConfidence: customThresholds.minConfidence || 60,
-        atrMultiplierSL: customThresholds.atrMultiplierSL || 2,
-        atrMultiplierTP: customThresholds.atrMultiplierTP || 4,
-        ...customThresholds
-    };
-
-    // Lấy dữ liệu klines
     const df = await fetchKlines(symbol, pair, timeframe);
-    if (!df || df.length < currentConfig.windowSize) {
-        return { result: '❗ Không thể lấy dữ liệu', confidence: 0 };
-    }
+    if (!df || df.length < currentConfig.windowSize) return { result: '❗ Không thể lấy dữ liệu', confidence: 0 };
 
-    // Tính các chỉ số kỹ thuật chỉ cho đoạn dữ liệu cần thiết
-    const lastIndex = df.length - 1;
-    const closePrices = df.map(d => d.close);
-    const volume = df.map(d => d.volume);
-
-    // Tính toán các chỉ số kỹ thuật
-    const volumeMA = computeMA(volume.slice(-20), 20); // Chỉ lấy 20 nến cuối
-    const volumeSpike = volume[lastIndex] > volumeMA * 1.5 ? 1 : 0;
-    const rsi = computeRSI(closePrices.slice(-14)); // RSI chỉ cần 14 nến cuối
-    const adx = computeADX(df.slice(-14)); // ADX chỉ cần 14 nến cuối
-    const [macd, signal, histogram] = computeMACD(closePrices.slice(-26)); // MACD cần 26 nến
-    const [upperBB, middleBB, lowerBB] = computeBollingerBands(closePrices.slice(-20));
-    const atr = computeATR(df.slice(-14)); // ATR cần 14 nến
-    const stochasticK = computeStochastic(df.slice(-14)); // Stochastic cần 14 nến
-    const vwap = computeVWAP(df.slice(-20)); // VWAP chỉ lấy 20 nến cuối
-    const obv = computeOBV(df.slice(-20)); // OBV chỉ lấy 20 nến cuối
-    const ichimoku = computeIchimoku(df.slice(-52)); // Ichimoku cần 52 nến
-    const fibLevels = computeFibonacciLevels(df.slice(-50)); // Fibonacci lấy 50 nến
-    const { support, resistance } = computeSupportResistance(df.slice(-50));
-
-    // Tính windowFeatures cho mô hình LSTM
     const windowFeatures = [];
-    for (let i = lastIndex - currentConfig.windowSize + 1; i <= lastIndex; i++) {
+    for (let i = df.length - currentConfig.windowSize; i < df.length; i++) {
         windowFeatures.push(computeFeature(df, i));
     }
 
-    const currentPrice = df[lastIndex].close;
+    const currentPrice = df[df.length - 1].close;
+    const closePrices = df.map(d => d.close);
+    const volume = df.map(d => d.volume);
+    const volumeMA = computeMA(volume, 20);
+    const volumeSpike = volume[volume.length - 1] > volumeMA * 1.5 ? 1 : 0;
+    const rsi = computeRSI(closePrices);
+    const adx = computeADX(df);
+    const [macd, signal, histogram] = computeMACD(closePrices);
+    const [upperBB, middleBB, lowerBB] = computeBollingerBands(closePrices);
+    let atr = computeATR(df);
+    if (atr <= 0) atr = 0.0001; // Đảm bảo ATR luôn dương
+    const stochasticK = computeStochastic(df);
+    const vwap = computeVWAP(df);
+    const obv = computeOBV(df);
+    const ichimoku = computeIchimoku(df);
+    const fibLevels = computeFibonacciLevels(df);
+    const { support, resistance } = computeSupportResistance(df);
 
-    // Dự đoán bằng mô hình LSTM
-    let longProb = 0, shortProb = 0, waitProb = 0;
-    try {
-        const input = tf.tensor3d([windowFeatures]);
-        const prediction = model.predict(input);
-        [longProb, shortProb, waitProb] = prediction.dataSync();
-        input.dispose();
-        prediction.dispose();
-    } catch (error) {
-        console.error(`Lỗi dự đoán mô hình: ${error.message}`);
-        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi dự đoán mô hình: ${error.message}\n`);
-        return { result: '❌ Lỗi dự đoán mô hình', confidence: 0 };
-    }
+    const input = tf.tensor3d([windowFeatures]);
+    const prediction = model.predict(input);
+    const [longProb, shortProb, waitProb] = prediction.dataSync();
+    input.dispose();
+    prediction.dispose();
 
-    // Xác định tín hiệu và độ tin cậy
-    let signalText = '⚪️ ĐỢI - Chưa có tín hiệu';
-    let confidence = 0;
-    let entry = currentPrice, sl = 0, tp = 0;
-    let rr = 0;
-
+    let signalText, confidence, entry = currentPrice, sl = 0, tp = 0;
     const maxProb = Math.max(longProb, shortProb, waitProb);
     confidence = Math.round(maxProb * 100);
 
-    // Kiểm tra điều kiện bổ sung để lọc tín hiệu
-    const isRsiOverbought = rsi > thresholds.rsiOverbought;
-    const isRsiOversold = rsi < thresholds.rsiOversold;
-    const isStrongTrend = adx > thresholds.adxTrend;
-    const isAboveMiddleBB = currentPrice > middleBB;
-    const isBelowMiddleBB = currentPrice < middleBB;
-
-    if (maxProb === longProb && confidence >= thresholds.minConfidence) {
-        // Chỉ chấp nhận tín hiệu LONG nếu RSI không quá mua và có dấu hiệu tăng
-        if (!isRsiOverbought && (isAboveMiddleBB || isStrongTrend)) {
-            signalText = '🟢 LONG - Mua';
-            sl = Math.max(currentPrice - atr * thresholds.atrMultiplierSL, support); // Dùng support làm SL nếu gần hơn
-            tp = Math.min(currentPrice + atr * thresholds.atrMultiplierTP, resistance); // Dùng resistance làm TP nếu gần hơn
-            const risk = entry - sl;
-            const reward = tp - entry;
-            rr = risk > 0 ? (reward / risk).toFixed(2) : 0;
-        } else {
-            signalText = '⚪️ ĐỢI - Chưa có tín hiệu';
-            confidence = Math.min(confidence, 50);
-        }
-    } else if (maxProb === shortProb && confidence >= thresholds.minConfidence) {
-        // Chỉ chấp nhận tín hiệu SHORT nếu RSI không quá bán và có dấu hiệu giảm
-        if (!isRsiOversold && (isBelowMiddleBB || isStrongTrend)) {
-            signalText = '🔴 SHORT - Bán';
-            sl = Math.min(currentPrice + atr * thresholds.atrMultiplierSL, resistance); // Dùng resistance làm SL nếu gần hơn
-            tp = Math.max(currentPrice - atr * thresholds.atrMultiplierTP, support); // Dùng support làm TP nếu gần hơn
-            const risk = sl - entry;
-            const reward = entry - tp;
-            rr = risk > 0 ? (reward / risk).toFixed(2) : 0;
-        } else {
-            signalText = '⚪️ ĐỢI - Chưa có tín hiệu';
-            confidence = Math.min(confidence, 50);
-        }
+    // if (maxProb === longProb) {
+    //     signalText = '🟢 LONG - Mua';
+    //     const slMultiplier = 3 - longProb * 2; // SL từ 1-3x ATR
+    //     const tpMultiplier = 2 + longProb * 4; // TP từ 2-6x ATR
+    //     sl = Math.max(currentPrice - atr * slMultiplier, support); // Dùng support thay vì fibLevels
+    //     tp = Math.min(currentPrice + atr * tpMultiplier, resistance); // Dùng resistance thay vì fibLevels
+    //     // Đảm bảo SL < entry và TP > entry
+    //     if (sl >= entry) sl = Math.max(entry - atr * 0.5, support);
+    //     if (tp <= entry) tp = Math.min(entry + atr, resistance);
+    // } else if (maxProb === shortProb) {
+    //     signalText = '🔴 SHORT - Bán';
+    //     const slMultiplier = 3 - shortProb * 2; // SL từ 1-3x ATR
+    //     const tpMultiplier = 2 + shortProb * 4; // TP từ 2-6x ATR
+    //     sl = Math.min(currentPrice + atr * slMultiplier, resistance); // Dùng resistance
+    //     tp = Math.max(currentPrice - atr * tpMultiplier, support); // Dùng support
+    //     // Đảm bảo SL > entry và TP < entry
+    //     if (sl <= entry) sl = Math.min(entry + atr * 0.5, resistance);
+    //     if (tp >= entry) tp = Math.max(entry - atr, support);
+    // } else {
+    //     signalText = '⚪️ ĐỢI - Chưa có tín hiệu';
+    //     confidence = Math.min(confidence, 50);
+    // }
+    if (maxProb === longProb) {
+        signalText = '🟢 LONG - Mua';
+        const slMultiplier = 3 - longProb * 2; // SL từ 1-3x ATR
+        const tpMultiplier = 2 + longProb * 4; // TP từ 2-6x ATR
+        sl = currentPrice - atr * slMultiplier; // Không dùng support
+        tp = currentPrice + atr * tpMultiplier; // Không dùng resistance
+        // Chỉ kiểm tra hợp lệ cơ bản
+        if (sl >= entry) sl = entry - atr * 0.1; // Khoảng cách tối thiểu 0.1x ATR
+        if (tp <= entry) tp = entry + atr * 0.2; // Khoảng cách tối thiểu 0.2x ATR
+    } else if (maxProb === shortProb) {
+        signalText = '🔴 SHORT - Bán';
+        const slMultiplier = 3 - shortProb * 2; // SL từ 1-3x ATR
+        const tpMultiplier = 2 + shortProb * 4; // TP từ 2-6x ATR
+        sl = currentPrice + atr * slMultiplier; // Không dùng resistance
+        tp = currentPrice - atr * tpMultiplier; // Không dùng support
+        // Chỉ kiểm tra hợp lệ cơ bản
+        if (sl <= entry) sl = entry + atr * 0.1; // Khoảng cách tối thiểu 0.1x ATR
+        if (tp >= entry) tp = entry - atr * 0.2; // Khoảng cách tối thiểu 0.2x ATR
     } else {
+        signalText = '⚪️ ĐỢI - Chưa có tín hiệu';
         confidence = Math.min(confidence, 50);
     }
-
-    // Lấy cài đặt người dùng
     const showTechnicalIndicators = await getUserSettings(chatId);
 
-    // Tạo thông tin chi tiết
     const details = [];
     if (showTechnicalIndicators) {
-        details.push(`📈 RSI: ${rsi.toFixed(1)} (${isRsiOverbought ? 'Quá mua' : isRsiOversold ? 'Quá bán' : 'Bình thường'})`);
+        details.push(`📈 RSI: ${rsi.toFixed(1)}`);
         details.push(`🎯 Stochastic %K: ${stochasticK.toFixed(1)}`);
         details.push(`📊 VWAP: ${vwap.toFixed(4)}`);
         details.push(`📦 OBV: ${(obv / 1e6).toFixed(2)}M`);
         const isAboveCloud = ichimoku && currentPrice > Math.max(ichimoku.spanA, ichimoku.spanB);
         const isBelowCloud = ichimoku && currentPrice < Math.min(ichimoku.spanA, ichimoku.spanB);
         details.push(`☁️ Ichimoku: ${isAboveCloud ? 'Trên đám mây' : isBelowCloud ? 'Dưới đám mây' : 'Trong đám mây'}`);
-        details.push(`📏 Fib Levels: 0.618: ${fibLevels[0.618].toFixed(4)}, 0.382: ${fibLevels[0.382].toFixed(4)}`);
+        details.push(`📏 Fib Levels: 0.618: ${fibLevels[0.618].toFixed(4)}, 0.5: ${fibLevels[0.5].toFixed(4)}, 0.382: ${fibLevels[0.382].toFixed(4)}`);
     }
     details.push(`📦 Volume: ${volumeSpike ? 'TĂNG ĐỘT BIẾN' : 'BÌNH THƯỜNG'}`);
     details.push(`🛡️ Hỗ trợ: ${support.toFixed(4)}, Kháng cự: ${resistance.toFixed(4)}`);
-
     const timestamp = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
     details.push(`⏰ Thời gian: ${timestamp}`);
 
-    // Xác định xu hướng
-    if (adx < thresholds.adxTrend) {
-        details.push(`📊 Xu hướng: Đi ngang`);
-    } else if (longProb > shortProb && isStrongTrend) {
-        details.push(`📈 Xu hướng: Tăng (dự đoán AI)`);
-    } else if (shortProb > longProb && isStrongTrend) {
-        details.push(`📉 Xu hướng: Giảm (dự đoán AI)`);
-    } else {
-        details.push(`📊 Xu hướng: Không rõ`);
-    }
+    if (adx < 20) details.push(`📊 Xu hướng: Đi ngang`);
+    else if (longProb > shortProb) details.push(`📈 Xu hướng: Tăng (dự đoán AI)`);
+    else if (shortProb > longProb) details.push(`📉 Xu hướng: Giảm (dự đoán AI)`);
+    else details.push(`📊 Xu hướng: Không rõ`);
 
-    // Thêm thông tin tín hiệu nếu có
     if (signalText !== '⚪️ ĐỢI - Chưa có tín hiệu') {
-        details.push(`⚖️ R:R: ${rr}:1`);
-        details.push(`✅ Độ tin cậy: ${confidence}\\%`);
+        let risk, reward, rr;
+        if (signalText.includes('LONG')) {
+            risk = entry - sl;
+            reward = tp - entry;
+        } else {
+            risk = sl - entry;
+            reward = entry - tp;
+        }
+        if (risk > 0) {
+            rr = (reward / risk).toFixed(2);
+            details.push(`⚖️ R:R: ${rr}:1`);
+        } else {
+            details.push(`⚖️ R:R: N/A`);
+        }
+        details.push(`✅ Độ tin cậy: ${confidence}%`);
         details.push(`🎯 Điểm vào: ${entry.toFixed(4)}`);
         details.push(`🛑 SL: ${sl.toFixed(4)}`);
         details.push(`💰 TP: ${tp.toFixed(4)}`);
-
-        // Đề xuất đòn bẩy an toàn hơn
-        let leverageAdvice = confidence >= 90 ? 'x10' : confidence >= 80 ? 'x5' : confidence >= 70 ? 'x3' : 'x1';
-        details.push(`💡 Khuyến nghị đòn bẩy: ${leverageAdvice}`);
+        const leverage = signalText === '🟢 LONG - Mua'
+            ? Math.round(longProb * 10)
+            : Math.round(shortProb * 10);
+        const safeLeverage = Math.min(leverage, 10); // Giới hạn tối đa x10
+        details.push(`💡 Khuyến nghị đòn bẩy: x${safeLeverage}`);
     }
 
-    // Tạo kết quả cuối cùng
     const resultText = `📊 *Phân tích ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]})*\n`
         + `💰 Giá: ${currentPrice.toFixed(4)}\n`
         + `⚡️ *${signalText}*\n`
         + details.join('\n');
 
-    return { result: resultText, confidence, signalText, entryPrice: entry, sl, tp };
+    return { result: resultText, confidence };
 }
-
 // =====================
 // SELF-EVALUATE & TRAIN
 // =====================
@@ -834,7 +812,7 @@ async function simulateConfig(config, stepInterval) {
             }
             const { result, confidence, signalText, entryPrice, sl, tp } = await getCryptoAnalysis(symbol, pair, timeframe, chatId);
             const now = Date.now();
-            if (confidence >= 75 && (!signalBuffer.has(configKey) || (now - signalBuffer.get(configKey).timestamp > SIGNAL_COOLDOWN))) {
+            if (confidence >= 80 && (!signalBuffer.has(configKey) || (now - signalBuffer.get(configKey).timestamp > SIGNAL_COOLDOWN))) {
                 bot.sendMessage(chatId, `🚨 *TÍN HIỆU GIẢ LẬP ${symbol.toUpperCase()}/${pair.toUpperCase()} (${timeframes[timeframe]})* 🚨\n${result}`, { parse_mode: 'Markdown' });
                 signalBuffer.set(configKey, { result, timestamp: now });
 
@@ -1089,9 +1067,9 @@ bot.onText(/\/status/, (msg) => {
         const statusMessage = `
 📊 *Trạng thái Bot*
 - Số lần huấn luyện: ${trainingCounter}
-- Độ chính xác trung bình: ${(avgAcc * 100).toFixed(2)}\\%
-- Độ chính xác cao nhất: ${(maxAcc * 100).toFixed(2)}\\%
-- Độ chính xác thấp nhất: ${(minAcc * 100).toFixed(2)}\\%
+- Độ chính xác trung bình: ${(avgAcc * 100).toFixed(2)}\%
+- Độ chính xác cao nhất: ${(maxAcc * 100).toFixed(2)}\%
+- Độ chính xác thấp nhất: ${(minAcc * 100).toFixed(2)}\%
 - RAM: ${usedMemoryMB.toFixed(2)} MB
 - Giả lập: ${enableSimulation ? 'Đang chạy' : 'Đã dừng'}
 - Cấu hình mô hình: WINDOW_SIZE=${currentConfig.windowSize}, Units=${currentConfig.units}, Epochs=${currentConfig.epochs}
@@ -1170,7 +1148,7 @@ function startAutoChecking() {
     }, CHECK_INTERVAL);
 }
 
-async function checkAutoSignal(chatId, { symbol, pair, timeframe }, confidenceThreshold = 75) {
+async function checkAutoSignal(chatId, { symbol, pair, timeframe }, confidenceThreshold = 70) {
     const configKey = `${chatId}_${symbol}_${pair}_${timeframe}`;
     const { result, confidence, signalText, entryPrice, sl, tp } = await getCryptoAnalysis(symbol, pair, timeframe, chatId);
     if (confidence >= confidenceThreshold) {
