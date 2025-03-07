@@ -1174,15 +1174,23 @@ function dynamicTrainingControl() {
     const avgAcc = recentAccuracies.reduce((sum, val) => sum + val, 0) / recentAccuracies.length;
     const maxAcc = Math.max(...recentAccuracies);
     const minAcc = Math.min(...recentAccuracies);
+
     if (avgAcc > 0.85 && (maxAcc - minAcc) < 0.05) {
-        enableSimulation = false;
-        console.log("Dynamic Training Control: Mô hình ổn định, dừng giả lập.");
-        if (adminChatId) {
-            bot.sendMessage(adminChatId, `✅ *Mô hình đã ổn định* | Độ chính xác trung bình: ${(avgAcc * 100).toFixed(2)}\\% | Đã dừng giả lập.`, { parse_mode: 'Markdown' });
+        if (enableSimulation) {
+            enableSimulation = false;
+            console.log("✅ Dynamic Training Control: Mô hình ổn định, dừng giả lập.");
+            if (adminChatId) {
+                bot.sendMessage(adminChatId, `✅ *Mô hình đã ổn định* | Độ chính xác trung bình: ${(avgAcc * 100).toFixed(2)}% | Đã dừng giả lập.`, { parse_mode: 'Markdown' });
+            }
         }
     } else {
-        enableSimulation = true;
-        console.log("Dynamic Training Control: Hiệu suất chưa ổn định, tiếp tục giả lập.");
+        if (!enableSimulation) {
+            enableSimulation = true;
+            console.log("⚡ Dynamic Training Control: Hiệu suất chưa ổn định, kích hoạt lại giả lập.");
+            simulateRealTimeForConfigs(1000); // Khởi động lại giả lập
+        } else {
+            console.log("⚡ Dynamic Training Control: Hiệu suất chưa ổn định, tiếp tục giả lập.");
+        }
     }
 }
 setInterval(dynamicTrainingControl, 10 * 60 * 1000);
