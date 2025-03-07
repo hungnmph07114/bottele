@@ -49,9 +49,6 @@ bot.on('message', (msg) => {
 // =====================
 //  SQLITE - LƯU TRỮ DỮ LIỆU
 // =====================
-// =====================
-//  SQLITE - LƯU TRỮ DỮ LIỆU
-// =====================
 const db = new sqlite3.Database('bot.db', (err) => {
     if (err) {
         console.error('SQLite Error:', err.message);
@@ -1190,6 +1187,7 @@ function dynamicTrainingControl() {
             simulateRealTimeForConfigs(1000); // Khởi động lại giả lập
         } else {
             console.log("⚡ Dynamic Training Control: Hiệu suất chưa ổn định, tiếp tục giả lập.");
+            simulateRealTimeForConfigs(1000); // Khởi động lại giả lập
         }
     }
 }
