@@ -495,50 +495,50 @@ async function getCryptoAnalysis(symbol, pair, timeframe, chatId, customThreshol
     const maxProb = Math.max(longProb, shortProb, waitProb);
     confidence = Math.round(maxProb * 100);
 
-    // if (maxProb === longProb) {
-    //     signalText = '🟢 LONG - Mua';
-    //     const slMultiplier = 3 - longProb * 2; // SL từ 1-3x ATR
-    //     const tpMultiplier = 2 + longProb * 4; // TP từ 2-6x ATR
-    //     sl = Math.max(currentPrice - atr * slMultiplier, support); // Dùng support thay vì fibLevels
-    //     tp = Math.min(currentPrice + atr * tpMultiplier, resistance); // Dùng resistance thay vì fibLevels
-    //     // Đảm bảo SL < entry và TP > entry
-    //     if (sl >= entry) sl = Math.max(entry - atr * 0.5, support);
-    //     if (tp <= entry) tp = Math.min(entry + atr, resistance);
-    // } else if (maxProb === shortProb) {
-    //     signalText = '🔴 SHORT - Bán';
-    //     const slMultiplier = 3 - shortProb * 2; // SL từ 1-3x ATR
-    //     const tpMultiplier = 2 + shortProb * 4; // TP từ 2-6x ATR
-    //     sl = Math.min(currentPrice + atr * slMultiplier, resistance); // Dùng resistance
-    //     tp = Math.max(currentPrice - atr * tpMultiplier, support); // Dùng support
-    //     // Đảm bảo SL > entry và TP < entry
-    //     if (sl <= entry) sl = Math.min(entry + atr * 0.5, resistance);
-    //     if (tp >= entry) tp = Math.max(entry - atr, support);
-    // } else {
-    //     signalText = '⚪️ ĐỢI - Chưa có tín hiệu';
-    //     confidence = Math.min(confidence, 50);
-    // }
     if (maxProb === longProb) {
         signalText = '🟢 LONG - Mua';
         const slMultiplier = 3 - longProb * 2; // SL từ 1-3x ATR
         const tpMultiplier = 2 + longProb * 4; // TP từ 2-6x ATR
-        sl = currentPrice - atr * slMultiplier; // Không dùng support
-        tp = currentPrice + atr * tpMultiplier; // Không dùng resistance
-        // Chỉ kiểm tra hợp lệ cơ bản
-        if (sl >= entry) sl = entry - atr * 0.1; // Khoảng cách tối thiểu 0.1x ATR
-        if (tp <= entry) tp = entry + atr * 0.2; // Khoảng cách tối thiểu 0.2x ATR
+        sl = Math.max(currentPrice - atr * slMultiplier, support); // Dùng support thay vì fibLevels
+        tp = Math.min(currentPrice + atr * tpMultiplier, resistance); // Dùng resistance thay vì fibLevels
+        // Đảm bảo SL < entry và TP > entry
+        if (sl >= entry) sl = Math.max(entry - atr * 0.5, support);
+        if (tp <= entry) tp = Math.min(entry + atr, resistance);
     } else if (maxProb === shortProb) {
         signalText = '🔴 SHORT - Bán';
         const slMultiplier = 3 - shortProb * 2; // SL từ 1-3x ATR
         const tpMultiplier = 2 + shortProb * 4; // TP từ 2-6x ATR
-        sl = currentPrice + atr * slMultiplier; // Không dùng resistance
-        tp = currentPrice - atr * tpMultiplier; // Không dùng support
-        // Chỉ kiểm tra hợp lệ cơ bản
-        if (sl <= entry) sl = entry + atr * 0.1; // Khoảng cách tối thiểu 0.1x ATR
-        if (tp >= entry) tp = entry - atr * 0.2; // Khoảng cách tối thiểu 0.2x ATR
+        sl = Math.min(currentPrice + atr * slMultiplier, resistance); // Dùng resistance
+        tp = Math.max(currentPrice - atr * tpMultiplier, support); // Dùng support
+        // Đảm bảo SL > entry và TP < entry
+        if (sl <= entry) sl = Math.min(entry + atr * 0.5, resistance);
+        if (tp >= entry) tp = Math.max(entry - atr, support);
     } else {
         signalText = '⚪️ ĐỢI - Chưa có tín hiệu';
         confidence = Math.min(confidence, 50);
     }
+    // if (maxProb === longProb) {
+    //     signalText = '🟢 LONG - Mua';
+    //     const slMultiplier = 3 - longProb * 2; // SL từ 1-3x ATR
+    //     const tpMultiplier = 2 + longProb * 4; // TP từ 2-6x ATR
+    //     sl = currentPrice - atr * slMultiplier; // Không dùng support
+    //     tp = currentPrice + atr * tpMultiplier; // Không dùng resistance
+    //     // Chỉ kiểm tra hợp lệ cơ bản
+    //     if (sl >= entry) sl = entry - atr * 0.1; // Khoảng cách tối thiểu 0.1x ATR
+    //     if (tp <= entry) tp = entry + atr * 0.2; // Khoảng cách tối thiểu 0.2x ATR
+    // } else if (maxProb === shortProb) {
+    //     signalText = '🔴 SHORT - Bán';
+    //     const slMultiplier = 3 - shortProb * 2; // SL từ 1-3x ATR
+    //     const tpMultiplier = 2 + shortProb * 4; // TP từ 2-6x ATR
+    //     sl = currentPrice + atr * slMultiplier; // Không dùng resistance
+    //     tp = currentPrice - atr * tpMultiplier; // Không dùng support
+    //     // Chỉ kiểm tra hợp lệ cơ bản
+    //     if (sl <= entry) sl = entry + atr * 0.1; // Khoảng cách tối thiểu 0.1x ATR
+    //     if (tp >= entry) tp = entry - atr * 0.2; // Khoảng cách tối thiểu 0.2x ATR
+    // } else {
+    //     signalText = '⚪️ ĐỢI - Chưa có tín hiệu';
+    //     confidence = Math.min(confidence, 50);
+    // }
     const showTechnicalIndicators = await getUserSettings(chatId);
 
     const details = [];
