@@ -202,9 +202,7 @@ async function trainModelData(data) {
 async function trainModelWithMultiplePairs() {
     const pairs = [
         { symbol: 'BTC', pair: 'USDT', timeframe: '1h' },
-        { symbol: 'ETH', pair: 'USDT', timeframe: '1h' },
         { symbol: 'ADA', pair: 'USDT', timeframe: '1h' },
-        { symbol: 'BNB', pair: 'USDT', timeframe: '1h' }
     ];
 
     for (const { symbol, pair, timeframe } of pairs) {
