@@ -1184,7 +1184,7 @@ function dynamicTrainingControl() {
         if (!enableSimulation) {
             enableSimulation = true;
             console.log("⚡ Dynamic Training Control: Hiệu suất chưa ổn định, kích hoạt lại giả lập.");
-            // simulateRealTimeForConfigs(1000); // Khởi động lại giả lập
+             simulateRealTimeForConfigs(1000); // Khởi động lại giả lập
         } else {
             console.log("⚡ Dynamic Training Control: Hiệu suất chưa ổn định, tiếp tục giả lập.");
             simulateRealTimeForConfigs(1000); // Khởi động lại giả lập
