@@ -49,11 +49,10 @@ bot.on('message', (msg) => {
 // =====================
 //  SQLITE - LƯU TRỮ DỮ LIỆU
 // =====================
-const sqlite3 = require('sqlite3').verbose();
-const fs = require('fs');
-
-// Kết nối tới cơ sở dữ liệu SQLite, lưu file trong thư mục cố định trên Railway
-const db = new sqlite3.Database('/data/bot.db', (err) => {
+// =====================
+//  SQLITE - LƯU TRỮ DỮ LIỆU
+// =====================
+const db = new sqlite3.Database('bot.db', (err) => {
     if (err) {
         console.error('SQLite Error:', err.message);
         fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi kết nối SQLite: ${err.message}\n`);
@@ -63,17 +62,15 @@ const db = new sqlite3.Database('/data/bot.db', (err) => {
     }
 });
 
-// Đảm bảo các lệnh được thực thi tuần tự
 db.serialize(() => {
     // Tạo bảng watch_configs
     db.run(`
         CREATE TABLE IF NOT EXISTS watch_configs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chatId INTEGER,
-            symbol TEXT,
-            pair TEXT,
-            timeframe TEXT,
-            UNIQUE(chatId, symbol, pair, timeframe)
+            chatId INTEGER NOT NULL,
+            symbol TEXT NOT NULL,
+            pair TEXT NOT NULL,
+            timeframe TEXT NOT NULL,
+            PRIMARY KEY (chatId, symbol, pair, timeframe)
         )
     `, (err) => {
         if (err) {
@@ -110,58 +107,40 @@ db.serialize(() => {
         }
     });
 
-    // Kiểm tra và thêm các cột bổ sung cho signal_history nếu cần
-    db.all("PRAGMA table_info(signal_history)", (err, columns) => {
+    // Tạo bảng user_settings
+    db.run(`
+        CREATE TABLE IF NOT EXISTS user_settings (
+            chatId INTEGER PRIMARY KEY,
+            showTechnicalIndicators INTEGER DEFAULT 0
+        )
+    `, (err) => {
         if (err) {
-            console.error('Lỗi kiểm tra bảng signal_history:', err.message);
-            fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi kiểm tra bảng signal_history: ${err.message}\n`);
-            return;
+            console.error('Lỗi tạo bảng user_settings:', err.message);
+            fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi tạo bảng user_settings: ${err.message}\n`);
+        } else {
+            console.log('✅ Bảng user_settings đã được tạo hoặc đã tồn tại.');
+            fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Bảng user_settings đã được tạo hoặc đã tồn tại.\n`);
         }
-
-        const columnNames = columns.map(c => c.name);
-        const columnsToAdd = [
-            { name: 'entry_price', type: 'REAL' },
-            { name: 'exit_price', type: 'REAL' },
-            { name: 'profit', type: 'REAL' }
-        ];
-
-        columnsToAdd.forEach(col => {
-            if (!columnNames.includes(col.name)) {
-                db.run(`ALTER TABLE signal_history ADD COLUMN ${col.name} ${col.type}`, (err) => {
-                    if (err) {
-                        console.error(`Lỗi thêm cột ${col.name} vào signal_history:`, err.message);
-                        fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi thêm cột ${col.name} vào signal_history: ${err.message}\n`);
-                    } else {
-                        console.log(`✅ Đã thêm cột ${col.name} vào signal_history`);
-                        fs.appendFileSync('bot.log', `${new Date().toISOString()} - ✅ Đã thêm cột ${col.name} vào signal_history\n`);
-                    }
-                });
-            } else {
-                console.log(`ℹ️ Cột ${col.name} đã tồn tại trong signal_history`);
-                fs.appendFileSync('bot.log', `${new Date().toISOString()} - ℹ️ Cột ${col.name} đã tồn tại trong signal_history\n`);
-            }
-        });
     });
 });
 
-// Handler lỗi promise không được xử lý
-process.on('unhandledRejection', (err) => {
-    console.error('Lỗi promise không được xử lý:', err.stack || err);
-    fs.appendFileSync('bot.log', `${new Date().toISOString()} - Lỗi promise không được xử lý: ${err.stack || err}\n`);
-    if (adminChatId) {
-        bot.sendMessage(adminChatId, `🚨 Lỗi promise không được xử lý: ${err.message}`);
-    }
-});
-
-// Phần còn lại của mã...
+// =====================
+//  HÀM HỖ TRỢ
+// =====================
 function addWatchConfig(chatId, symbol, pair, timeframe, callback) {
-    db.run(`INSERT OR IGNORE INTO watch_configs (chatId, symbol, pair, timeframe) VALUES (?, ?, ?, ?)`,
-        [chatId, symbol, pair, timeframe], callback);
+    db.run(
+        `INSERT OR REPLACE INTO watch_configs (chatId, symbol, pair, timeframe) VALUES (?, ?, ?, ?)`,
+        [chatId, symbol, pair, timeframe],
+        callback
+    );
 }
 
 function deleteWatchConfig(chatId, symbol, pair, timeframe, callback) {
-    db.run(`DELETE FROM watch_configs WHERE chatId = ? AND symbol = ? AND pair = ? AND timeframe = ?`,
-        [chatId, symbol, pair, timeframe], callback);
+    db.run(
+        `DELETE FROM watch_configs WHERE chatId = ? AND symbol = ? AND pair = ? AND timeframe = ?`,
+        [chatId, symbol, pair, timeframe],
+        callback
+    );
 }
 
 function loadWatchConfigs() {
@@ -175,20 +154,35 @@ function loadWatchConfigs() {
 
 function getUserSettings(chatId) {
     return new Promise((resolve, reject) => {
-        db.get(`SELECT showTechnicalIndicators FROM user_settings WHERE chatId = ?`, [chatId], (err, row) => {
-            if (err) reject(err);
-            resolve(row ? row.showTechnicalIndicators : 0);
-        });
+        db.get(
+            `SELECT showTechnicalIndicators FROM user_settings WHERE chatId = ?`,
+            [chatId],
+            (err, row) => {
+                if (err) reject(err);
+                resolve(row ? row.showTechnicalIndicators : 0);
+            }
+        );
     });
 }
 
 function setUserSettings(chatId, showTechnicalIndicators) {
-    db.run(`INSERT OR REPLACE INTO user_settings (chatId, showTechnicalIndicators) VALUES (?, ?)`,
-        [chatId, showTechnicalIndicators], (err) => {
+    db.run(
+        `INSERT OR REPLACE INTO user_settings (chatId, showTechnicalIndicators) VALUES (?, ?)`,
+        [chatId, showTechnicalIndicators],
+        (err) => {
             if (err) console.error('Lỗi lưu cài đặt người dùng:', err.message);
-        });
+        }
+    );
 }
 
+// Hàm xuất file bot.db (tùy chọn)
+function exportDatabase(chatId) {
+    return new Promise((resolve, reject) => {
+        bot.sendDocument(chatId, 'bot.db', { caption: 'Đây là file cơ sở dữ liệu bot.db' })
+            .then(() => resolve())
+            .catch((err) => reject(err));
+    });
+}
 // =====================
 // CẤU HÌNH LSTM
 // =====================
